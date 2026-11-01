@@ -45,7 +45,7 @@ The configured flow is:
 Browser → local Next.js /api/chat → token-protected Runpod gateway → private vLLM
 ```
 
-The source for the gateway and its startup integration is in the sibling `../llm-inference-server` project:
+The source for the gateway and its startup integration is in the [llm-inference-server repository](https://github.com/alstomli/llm-inference-server). For local integration checks, clone it beside this repository as `../llm-inference-server`:
 
 - `scripts/chat-gateway.py`: authenticated `/health` and streaming `POST /v1/chat/completions` only. Model-management, metrics, docs, and arbitrary upstream paths are not exposed.
 - `scripts/start-server.sh`: `CHAT_ENABLED=true` starts the gateway automatically; `METRICS_ENABLED=true` retains automatic monitoring. A service failure stops the launcher and other services. This is not a guarantee of automatic host recovery.
