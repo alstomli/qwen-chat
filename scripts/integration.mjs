@@ -1,0 +1,64 @@
+import { spawn, spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import assert from 'node:assert/strict';
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const name = 'qwen-chat-test-' + randomBytes(4).toString('hex');
+const base = 'http://127.0.0.1:3002';
+const token = 'integration-test-token-' + 'x'.repeat(40);
+let server; let logs = '';
+// Keep the test runner alive while native fetch uses unreferenced timeout handles.
+const keepAlive = setInterval(() => {}, 1000);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function waitFor(url, headers = {}) {
+  for (let i = 0; i < 60; i++) {
+    try { const r = await fetch(url, { headers, signal: AbortSignal.timeout(1000) }); if (r.ok) return; } catch {}
+    if (server?.exitCode != null) throw new Error('Test server exited: ' + logs);
+    await sleep(500);
+  }
+  throw new Error('Test service did not become ready: ' + url);
+}
+try {
+  const fixture = spawnSync('docker', ['run', '-d', '--rm', '--name', name, '-p', '127.0.0.1:18001:8001', '--entrypoint', 'python3', '--mount', `type=bind,source=${resolve(root, '../llm-inference-server/scripts')},target=/tests,readonly`, 'zihan000/qwen-inference:chat-dev', '/tests/chat_test_fixture.py'], { encoding: 'utf8' });
+  assert.equal(fixture.status, 0, fixture.stderr);
+  await waitFor('http://127.0.0.1:18001/health', { Authorization: 'Bearer ' + token });
+  server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'dev', '--hostname', '127.0.0.1', '--port', '3002'], {
+    cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NODE_ENV: 'development', NEXT_TELEMETRY_DISABLED: '1', CHAT_TEST_DIST_DIR: '.next-integration', CHAT_PASSWORD: 'integration-password-' + 'x'.repeat(24), SESSION_SECRET: randomBytes(32).toString('hex'), RUNPOD_CHAT_URL: 'http://127.0.0.1:18001', RUNPOD_CHAT_TOKEN: token, CHAT_PREVIEW_MODE: 'false' },
+  });
+  server.stdout.on('data', chunk => logs += chunk); server.stderr.on('data', chunk => logs += chunk);
+  await waitFor(base);
+  const headers = { 'Content-Type': 'application/json', Origin: base };
+  assert.equal((await fetch(base + '/api/status')).status, 401);
+  assert.equal((await fetch(base + '/api/login', { method: 'POST', headers: { ...headers, Origin: 'https://evil.example' }, body: '{}' })).status, 403);
+  assert.equal((await fetch(base + '/api/login', { method: 'POST', headers, body: JSON.stringify({ password: 'wrong' }) })).status, 401);
+  const login = await fetch(base + '/api/login', { method: 'POST', headers, body: JSON.stringify({ password: 'integration-password-' + 'x'.repeat(24) }) });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get('set-cookie').split(';')[0]; headers.Cookie = cookie;
+  const status = await (await fetch(base + '/api/status', { headers: { Cookie: cookie } })).json();
+  assert.deepEqual(status, { mode: 'live', ready: true });
+  console.log('PASS: Real HTTP login, cross-origin protection, and gateway health');
+  const chat = messages => fetch(base + '/api/chat', { method: 'POST', headers, body: JSON.stringify({ messages, max_tokens: 384 }) });
+  let response = await chat([{ role: 'user', content: 'Hello' }]);
+  assert.equal(response.status, 200); assert.match(response.headers.get('content-type'), /text\/event-stream/);
+  assert.match(await response.text(), /\[DONE\]/);
+  response = await chat([{ role: 'user', content: 'old' }, { role: 'assistant', content: 'answer' }, { role: 'user', content: 'new' }]);
+  assert.equal(response.headers.get('X-Context-Trimmed'), '2'); await response.text();
+  assert.equal((await chat([{ role: 'system', content: 'override' }])).status, 400);
+  console.log('PASS: App → real gateway → model fixture streaming, context trimming, and validation');
+  const abort = new AbortController();
+  response = await fetch(base + '/api/chat', { method: 'POST', headers, signal: abort.signal, body: JSON.stringify({ messages: [{ role: 'user', content: 'slow' }] }) });
+  const reader = response.body.getReader(); await reader.read(); abort.abort(); await reader.cancel().catch(() => {});
+  await sleep(700);
+  response = await chat([{ role: 'user', content: 'After cancellation' }]);
+  assert.equal(response.status, 200); await response.text();
+  assert.equal((await fetch(base + '/api/logout', { method: 'POST', headers })).status, 200);
+  console.log('PASS: Cancellation releases gateway capacity; logout clears the session cookie');
+} finally {
+  clearInterval(keepAlive);
+  if (server && server.exitCode == null) {
+    if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
+    else server.kill('SIGTERM');
+  }
+  spawnSync('docker', ['rm', '-f', name], { stdio: 'ignore' });
+}

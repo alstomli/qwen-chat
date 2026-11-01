@@ -1,0 +1,184 @@
+"use client";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { ArrowUp, ArrowUpRight, Check, ChevronDown, Code2, Compass, Copy, Feather, LoaderCircle, LogOut, Menu, MessageSquare, PanelLeftClose, Plus, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, X, RotateCcw } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { consumeCompletion } from "@/lib/protocol";
+import { completedHistory, parseConversations, STORAGE_KEY, type Conversation, type Message } from "@/lib/storage";
+
+type Connection = { mode: "checking" | "live" | "preview" | "unconfigured"; ready: boolean };
+const starters = [
+  { icon: Feather, label: "Find the right words", text: "Help me write a thoughtful email to reconnect with an old colleague. Keep it warm and natural.", caption: "A first draft, a fresh perspective" },
+  { icon: Compass, label: "Make sense of something", text: "Explain how large language models work, using a simple everyday analogy.", caption: "Turn a big idea into a clear one" },
+  { icon: Code2, label: "Build something useful", text: "Write a small Python function that reads a CSV file and summarizes its numeric columns. Explain each step.", caption: "Work through code, step by step" },
+];
+const uid = () => crypto.randomUUID();
+const logo = <span className="qwen-symbol" aria-hidden="true">✳</span>;
+
+export default function ChatWorkspace({ initialAuthenticated, loginConfigured }: { initialAuthenticated: boolean; loginConfigured: boolean }) {
+  const [authenticated, setAuthenticated] = useState(initialAuthenticated);
+  const [password, setPassword] = useState(""); const [loginError, setLoginError] = useState(""); const [signingIn, setSigningIn] = useState(false);
+  const [chats, setChats] = useState<Conversation[]>([]); const [loaded, setLoaded] = useState(false);
+  const [activeId, setActiveId] = useState<string | null>(null); const [draft, setDraft] = useState(""); const [search, setSearch] = useState("");
+  const [sidebar, setSidebar] = useState(false); const [settings, setSettings] = useState(false); const [deleting, setDeleting] = useState<string | null>(null);
+  const [connection, setConnection] = useState<Connection>({ mode: "checking", ready: false });
+  const [busy, setBusy] = useState<string | null>(null); const [toast, setToast] = useState(""); const [maxTokens, setMaxTokens] = useState(768); const [temperature, setTemperature] = useState(0.7);
+  const controller = useRef<AbortController | null>(null); const textarea = useRef<HTMLTextAreaElement>(null); const searchInput = useRef<HTMLInputElement>(null); const bottom = useRef<HTMLDivElement>(null); const scroller = useRef<HTMLDivElement>(null); const follow = useRef(true); const dialog = useRef<HTMLDivElement>(null);
+  const active = chats.find(c => c.id === activeId); const messages = active?.messages ?? [];
+  const preview = connection.mode === "preview";
+
+  useEffect(() => {
+    if (!authenticated) return;
+    try { const stored = parseConversations(localStorage.getItem(STORAGE_KEY)); setChats(stored); setActiveId(stored[0]?.id ?? null); }
+    catch { setToast("Your browser couldn't load saved conversations."); }
+    setLoaded(true);
+  }, [authenticated]);
+  useEffect(() => {
+    if (!loaded || !authenticated) return;
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(chats)); }
+    catch { setToast("Browser storage is full. This conversation will only be available in this tab."); }
+  }, [chats, loaded, authenticated]);
+  useEffect(() => {
+    if (!authenticated) return;
+    let mounted = true;
+    async function check() {
+      try {
+        const res = await fetch("/api/status");
+        if (res.status === 401) { if (mounted) setAuthenticated(false); return; }
+        const body = await res.json(); if (mounted) setConnection(body);
+      } catch { if (mounted) setConnection({ mode: "live", ready: false }); }
+    }
+    void check(); const timer = setInterval(check, 30_000);
+    return () => { mounted = false; clearInterval(timer); };
+  }, [authenticated]);
+  useEffect(() => { if (follow.current) bottom.current?.scrollIntoView({ behavior: busy ? "instant" : "smooth" }); }, [chats, busy]);
+  useEffect(() => { if (textarea.current) { textarea.current.style.height = "auto"; textarea.current.style.height = Math.min(textarea.current.scrollHeight, 160) + "px"; } }, [draft]);
+  useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(""), 6000); return () => clearTimeout(timer); }, [toast]);
+  useEffect(() => {
+    function key(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key === "k") { event.preventDefault(); setSidebar(true); setTimeout(() => searchInput.current?.focus(), 20); }
+      if (event.key === "Escape") { setSidebar(false); setSettings(false); setDeleting(null); }
+    }
+    window.addEventListener("keydown", key); return () => window.removeEventListener("keydown", key);
+  }, []);
+  useEffect(() => {
+    if (!settings && !deleting) return;
+    const previous = document.activeElement as HTMLElement;
+    dialog.current?.querySelector<HTMLElement>("button, select, input")?.focus();
+    return () => previous?.focus();
+  }, [settings, deleting]);
+  useEffect(() => () => controller.current?.abort(), []);
+
+  async function login(event: FormEvent) {
+    event.preventDefault(); setSigningIn(true); setLoginError("");
+    try {
+      const response = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) });
+      if (!response.ok) throw new Error((await response.json()).error);
+      setPassword(""); setAuthenticated(true);
+    } catch (error) { setLoginError(error instanceof Error ? error.message : "Couldn't sign in. Try again."); }
+    finally { setSigningIn(false); }
+  }
+  function newChat() { controller.current?.abort(); setActiveId(null); setDraft(""); setSidebar(false); follow.current = true; textarea.current?.focus(); }
+  function updateMessage(chatId: string, messageId: string, patch: Partial<Message> | ((m: Message) => Partial<Message>)) {
+    setChats(prev => prev.map(chat => chat.id !== chatId ? chat : { ...chat, messages: chat.messages.map(m => m.id === messageId ? { ...m, ...(typeof patch === "function" ? patch(m) : patch) } : m) }));
+  }
+  async function send(text = draft, history = messages) {
+    text = text.trim(); if (!text || controller.current) return;
+    if (chats.length >= 100 && !activeId) { setToast("You have 100 saved chats. Delete one before starting another."); return; }
+    if (text.length > 12000) { setToast("Please shorten your message to 12,000 characters or fewer."); return; }
+    const id = activeId ?? uid(); const responseId = uid();
+    const pending: Message[] = [...history, { id: uid(), role: "user", content: text }, { id: responseId, role: "assistant", content: "" }];
+    const input = [...completedHistory(history), { role: "user", content: text }];
+    while ((input.length > 79 || new TextEncoder().encode(JSON.stringify(input)).length > 58000) && input.length > 1) input.splice(0, 2);
+    setChats(prev => [{ id, title: active?.title ?? text.slice(0, 48), updatedAt: Date.now(), messages: pending }, ...prev.filter(c => c.id !== id)]);
+    setActiveId(id); setDraft(""); setSidebar(false); follow.current = true;
+    const abort = new AbortController(); controller.current = abort; setBusy(id);
+    try {
+      const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: input, max_tokens: maxTokens, temperature }), signal: abort.signal });
+      if (!response.ok || !response.body) { if (response.status === 401) setAuthenticated(false); throw new Error((await response.json()).error ?? "Couldn't start a reply."); }
+      const trimmed = Number(response.headers.get("X-Context-Trimmed") ?? 0);
+      if (trimmed) updateMessage(id, responseId, { note: "Earlier messages were omitted to fit the model's context." });
+      await consumeCompletion(response.body, delta => updateMessage(id, responseId, m => ({ content: m.content + delta })), reason => {
+        if (reason === "length") updateMessage(id, responseId, { note: "Response length reached. Ask me to continue for more." });
+      });
+      updateMessage(id, responseId, { state: "complete" });
+    } catch (error) {
+      if (abort.signal.aborted) updateMessage(id, responseId, { state: "stopped", note: "You stopped this reply." });
+      else updateMessage(id, responseId, { state: "error", note: error instanceof Error ? error.message : "The connection was interrupted. Please retry." });
+    } finally { controller.current = null; setBusy(null); textarea.current?.focus(); }
+  }
+  function retry() { const index = messages.findLastIndex(m => m.role === "user"); if (index >= 0) void send(messages[index].content, messages.slice(0, index)); }
+  async function logout() {
+    controller.current?.abort();
+    try { const res = await fetch("/api/logout", { method: "POST" }); if (!res.ok) throw new Error(); setAuthenticated(false); setSettings(false); setLoaded(false); setChats([]); setActiveId(null); }
+    catch { setToast("Couldn't sign out. Please try again."); }
+  }
+  function trapFocus(event: React.KeyboardEvent) {
+    if (event.key !== "Tab") return;
+    const items = dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input, select, a[href]'); if (!items?.length) return;
+    const first = items[0], last = items[items.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  }
+
+  if (!authenticated) return <div className="login-page">
+    <div className="login-brand">{logo}<span>qwen<span className="brand-dot">.</span></span></div>
+    <main className="login-main"><div className="eyebrow"><span className="tiny-line"/> YOUR PERSONAL WORKSPACE</div><h1>A space for<br/><em>your next thought.</em></h1><p>Welcome back. Make yourself at home.</p>
+      <form onSubmit={login} className="login-form"><label htmlFor="workspace-password">Workspace password</label><input id="workspace-password" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter your password" required autoFocus disabled={!loginConfigured}/>{loginError && <p className="form-error" role="alert">{loginError}</p>}{!loginConfigured && <p className="form-error">Workspace login needs to be configured before you can sign in.</p>}<button className="primary-button" disabled={signingIn || !loginConfigured}>{signingIn ? <LoaderCircle size={18} className="spin"/> : <>Enter workspace <ArrowUpRight size={18}/></>}</button></form>
+      <div className="login-note"><ShieldCheck size={15}/> Just you and your ideas.</div>
+    </main><footer className="login-footer">A little curiosity goes a long way.<span>POWERED BY QWEN</span></footer>
+    <div className="login-art" aria-hidden="true"><div className="orbit orbit-one"/><div className="orbit orbit-two"/><div className="orbit orbit-three"/><span>✳</span><i className="orbit-dot"/></div>
+  </div>;
+
+  return <div className="workspace">
+    {sidebar && <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebar(false)}/>}
+    <aside className={`sidebar ${sidebar ? "is-open" : ""}`} aria-label="Conversations">
+      <div className="sidebar-brand"><button className="wordmark" onClick={newChat} aria-label="Qwen home">{logo}<span>qwen<span className="brand-dot">.</span></span></button><button className="icon-button mobile-only" onClick={() => setSidebar(false)} aria-label="Close sidebar"><PanelLeftClose size={18}/></button><span className="personal-tag">PERSONAL</span></div>
+      <button className="new-chat" onClick={newChat}><Plus size={17}/> New conversation <span>↗</span></button>
+      <div className="search-chats"><Search size={15}/><input ref={searchInput} aria-label="Search conversations" placeholder="Search conversations" value={search} onChange={e => setSearch(e.target.value)}/><kbd>⌘ K</kbd></div>
+      <div className="history-heading">YOUR CONVERSATIONS<span>{chats.length.toString().padStart(2, "0")}</span></div>
+      <div className="history-list">{chats.filter(c => c.title.toLowerCase().includes(search.toLowerCase())).map(chat => <div className={`history-item ${chat.id === activeId ? "active" : ""}`} key={chat.id}><button className="history-link" onClick={() => { setActiveId(chat.id); setDraft(""); setSidebar(false); follow.current = true; }}><MessageSquare size={15}/><span>{chat.title}</span></button><button className="delete-chat" aria-label={`Delete ${chat.title}`} onClick={() => setDeleting(chat.id)}><Trash2 size={14}/></button></div>)}{!chats.length && <div className="empty-history"><MessageSquare size={23} strokeWidth={1.3}/><p>Good conversations<br/>start with a little curiosity.</p><span>Your chats will appear here.</span></div>}{chats.length > 0 && !chats.some(c => c.title.toLowerCase().includes(search.toLowerCase())) && <p className="no-results">No conversations found.</p>}</div>
+      <div className="sidebar-bottom"><div className="private-note"><ShieldCheck size={15}/><span>Saved only in this browser</span></div><button className="profile-button" onClick={() => setSettings(true)}><span className="avatar">Z</span><span><strong>Your workspace</strong><small>Personal account</small></span><Settings2 size={17}/></button></div>
+    </aside>
+    <div className="main-shell">
+      <header className="workspace-header"><div className="workspace-heading"><button className="icon-button mobile-only" onClick={() => setSidebar(true)} aria-label="Open sidebar"><Menu size={20}/></button><span className="header-label">Personal workspace</span><span className="header-slash">/</span><button className="model-button" onClick={() => setSettings(true)}>Qwen <ChevronDown size={14}/></button></div><button className={`connection-pill ${connection.mode === "live" && connection.ready ? "online" : preview ? "preview" : "offline"}`} onClick={() => setSettings(true)}><span/>{preview ? "Local preview" : connection.mode === "checking" ? "Connecting" : connection.mode === "unconfigured" ? "Setup needed" : connection.ready ? "Model online" : "Model offline"}<ArrowUpRight size={13}/></button></header>
+      <main className={`chat-main ${messages.length ? "has-messages" : ""}`} ref={scroller} onScroll={() => { const el = scroller.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>
+        {!messages.length ? <div className="welcome"><div className="welcome-mark" aria-hidden="true"><span>✳</span><i/></div><div className="eyebrow">A FRESH CONVERSATION</div><h1>A little curiosity.<br/><em>A lot of possibility.</em></h1><p>Your space to think, write, and work things out.</p><div className="starter-grid">{starters.map(card => <button className="starter-card" key={card.label} onClick={() => { setDraft(card.text); textarea.current?.focus(); }}><div><card.icon size={20} strokeWidth={1.45}/><ArrowUpRight size={16}/></div><strong>{card.label}</strong><small>{card.caption}</small></button>)}</div></div>
+        : <div className="message-list">{messages.map((message, index) => <article className={`message ${message.role}`} key={message.id}><div className="message-avatar">{message.role === "assistant" ? logo : "Z"}</div><div className="message-body"><div className="message-author">{message.role === "user" ? "You" : preview ? "Qwen · preview" : "Qwen"}{message.role === "assistant" && <span>ASSISTANT</span>}</div>{message.content ? message.role === "user" ? <p className="user-content">{message.content}</p> : <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: ({ children }) => <CodeBlock>{children}</CodeBlock>, a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> }}>{message.content}</ReactMarkdown></div> : busy === activeId && index === messages.length - 1 ? <div className="thinking" aria-label="Qwen is thinking"><span/><span/><span/></div> : null}{message.note && <div className={`message-note ${message.state === "error" ? "error" : ""}`} role={message.state === "error" ? "alert" : undefined}>{message.note}</div>}{message.role === "assistant" && busy !== activeId && <div className="message-actions">{message.content && <CopyButton text={message.content}/>} {index === messages.length - 1 && <button onClick={retry} disabled={!!busy}><RotateCcw size={14}/><span>Try again</span></button>}{message.state === "stopped" && <span>Stopped</span>}</div>}</div></article>)}<div ref={bottom}/></div>}
+      </main>
+      <div className="composer-region"><div className="composer-wrap">{preview && <div className="preview-note"><Sparkles size={13}/> Local preview · sample replies, no model requests</div>}{connection.mode === "live" && !connection.ready && <div className="offline-note">Your model may be stopped or loading. You can try again when it’s ready.</div>}<form className="composer" onSubmit={e => { e.preventDefault(); void send(); }}><label className="sr-only" htmlFor="message">Message Qwen</label><textarea ref={textarea} id="message" placeholder="What’s on your mind?" value={draft} onChange={e => setDraft(e.target.value)} maxLength={12000} rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}/><div className="composer-bottom"><span className="composer-model">{logo} Qwen <span>27B</span></span><div className="composer-controls"><span className="enter-hint">Shift + Enter for a new line</span>{busy ? <button type="button" className="send-button stop-button" aria-label="Stop generation" onClick={() => controller.current?.abort()}><Square size={15} fill="currentColor"/></button> : <button className="send-button" aria-label="Send message" disabled={!draft.trim()}><ArrowUp size={20}/></button>}</div></div></form><p className="composer-footer">A helpful second perspective. Always give important details a second look.</p></div></div>
+    </div>
+    {toast && <div className="toast" role="status">{toast}<button onClick={() => setToast("")} aria-label="Dismiss notification"><X size={14}/></button></div>}
+    {(settings || deleting) && <div className="modal-backdrop" onClick={() => { setSettings(false); setDeleting(null); }}><div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" ref={dialog} onKeyDown={trapFocus} onClick={e => e.stopPropagation()}><button className="icon-button close-dialog" onClick={() => { setSettings(false); setDeleting(null); }} aria-label="Close dialog"><X size={20}/></button>{deleting ? <><div className="eyebrow">MAKE A LITTLE ROOM</div><h2 id="dialog-title">Delete this conversation?</h2><p>This removes the conversation from this browser. It can’t be undone.</p><div className="dialog-buttons"><button className="secondary-button" onClick={() => setDeleting(null)}>Keep conversation</button><button className="danger-button" onClick={() => { if (busy === deleting) controller.current?.abort(); setChats(prev => prev.filter(c => c.id !== deleting)); if (activeId === deleting) setActiveId(null); setDeleting(null); }}>Delete conversation</button></div></> : <><div className="eyebrow">MAKE YOURSELF AT HOME</div><h2 id="dialog-title">Your workspace</h2><div className="setting-status"><span className={`status-dot ${connection.ready ? "ready" : ""}`}/><div><strong>{preview ? "Local preview" : connection.mode === "unconfigured" ? "Model connection needed" : connection.ready ? "Your model is ready" : "Model unavailable"}</strong><p>{preview ? "Explore the interface with sample replies. These aren't generated by your model." : connection.mode === "unconfigured" ? "Connect your Runpod model to start chatting." : connection.ready ? "Connected to your personal Qwen model." : "Your Pod may be stopped or warming up."}</p></div></div><label className="setting-label" htmlFor="length">Response length<select id="length" value={maxTokens} onChange={e => setMaxTokens(Number(e.target.value))}><option value={384}>Concise · 384 tokens</option><option value={768}>Balanced · 768 tokens</option><option value={1024}>Detailed · 1,024 tokens</option></select></label><label className="setting-label" htmlFor="temperature">Creativity <span>{temperature.toFixed(1)}</span><input id="temperature" type="range" min="0" max="1.5" step="0.1" value={temperature} onChange={e => setTemperature(Number(e.target.value))}/></label><p className="settings-footnote">Chats stay in this browser. In live mode, messages you send are processed by your model. Older messages may be omitted to fit its context.</p><button className="signout-button" onClick={logout}><LogOut size={16}/> Sign out</button></>}</div></div>}
+  </div>;
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [state, setState] = useState("idle");
+  async function copy() { setState(await copyText(text) ? "copied" : "failed"); setTimeout(() => setState("idle"), 2500); }
+  return <button onClick={copy} aria-label={state === "copied" ? "Copied" : "Copy response"}>{state === "copied" ? <Check size={14}/> : <Copy size={14}/>}<span>{state === "copied" ? "Copied" : state === "failed" ? "Select text to copy" : "Copy"}</span></button>;
+}
+function CodeBlock({ children }: { children: ReactNode }) {
+  const pre = useRef<HTMLPreElement>(null); const [state, setState] = useState("idle");
+  return <div className="code-block"><div><span>Code</span><button aria-label="Copy code" onClick={async () => { setState(await copyText(pre.current?.innerText ?? "") ? "copied" : "failed"); setTimeout(() => setState("idle"), 2500); }}>{state === "copied" ? <Check size={13}/> : <Copy size={13}/>} {state === "copied" ? "Copied" : state === "failed" ? "Select code to copy" : "Copy code"}</button></div><pre ref={pre}>{children}</pre></div>;
+}
+async function copyText(text: string) {
+  // Embedded browsers may deny the asynchronous clipboard API. Keep a user-gesture fallback.
+  const field = document.createElement("textarea");
+  field.value = text; field.setAttribute("readonly", ""); field.style.cssText = "position:fixed;left:-9999px;top:0";
+  const previous = document.activeElement as HTMLElement;
+  document.body.append(field); field.select();
+  let copied = false;
+  try { copied = document.execCommand("copy"); } catch { /* Try the modern API below. */ }
+  field.remove(); previous?.focus();
+  if (copied) return true;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      navigator.clipboard.writeText(text),
+      new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("Clipboard unavailable")), 1500); })
+    ]);
+    return true;
+  } catch { return false; }
+  finally { clearTimeout(timeout); }
+}
