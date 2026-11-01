@@ -4,6 +4,7 @@ import { issueSession, validSession, passwordMatches, sameOrigin, allowLogin, cr
 import { consumeCompletion, validateInput } from "../src/lib/protocol";
 import { completedHistory, parseConversations } from "../src/lib/storage";
 import { connectionConfig, readJson } from "../src/lib/server";
+import { DEFAULT_SETTINGS, SETTINGS_MAX, fitSettings, parseSettings, parseServerLimits, validateSettings, fitMessages, jsonBytes } from "../src/lib/chat-settings";
 process.env.CHAT_PASSWORD = "test-password-only-123456789";
 process.env.SESSION_SECRET = "test-signing-secret-" + "x".repeat(40);
 
@@ -55,7 +56,9 @@ test("chat validation rejects role injection, broken histories and invalid gener
   assert.throws(() => validateInput({ messages: [{ role: "user", content: "Hello" }], max_tokens: 100000 }));
   assert.throws(() => validateInput({ messages: [{ role: "user", content: "Hello" }], temperature: NaN }));
   assert.throws(() => validateInput({ messages: [{ role: "user", content: " " }] }));
-  assert.equal(validateInput({ messages: [{ role: "user", content: "Hello" }] }).max_tokens, 768);
+  assert.equal(validateInput({ messages: [{ role: "user", content: "Hello" }] }).max_tokens, 7680);
+  assert.equal(validateInput({ messages: [{ role: "user", content: "Hello" }], max_tokens: 10240 }).max_tokens, 10240);
+  assert.throws(() => validateInput({ messages: [{ role: "user", content: "Hello" }], max_tokens: 10241 }));
 });
 test("SSE handles split UTF-8, CRLF, ignored comments, finish reasons and DONE", async () => {
   const source = ': heartbeat\r\n\r\ndata: {"choices":[{"delta":{"content":"你好 🌱"}}]}\r\n\r\ndata: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\ndata: [DONE]\n\n';
@@ -70,8 +73,13 @@ test("SSE detects interrupted responses and explicit upstream errors", async () 
   await assert.rejects(consumeCompletion(body('data: {"error":{"message":"Timed out"}}\n\n'), () => {}), /Timed out/);
 });
 test("request size limits apply even without Content-Length", async () => {
-  const request = new Request("http://localhost/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "x".repeat(65000) }) });
+  const large = { text: "你".repeat(120000) };
+  const accepted = new Request("http://localhost/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(large) });
+  assert.deepEqual(await readJson(accepted), large);
+  const request = new Request("http://localhost/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "x".repeat(650000) }) });
   await assert.rejects(readJson(request), /too large/);
+  const padded = new Request("http://localhost/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: " ".repeat(1024) + "{}" });
+  await assert.rejects(readJson(padded, () => 1024), /configured byte limit/);
 });
 test("storage recovers from corruption and excludes unsuccessful turns from future context", () => {
   assert.deepEqual(parseConversations("invalid"), []);
@@ -101,4 +109,41 @@ test("production disables sample replies and requires an HTTPS gateway", () => {
       if (value === undefined) delete process.env[key]; else Reflect.set(process.env, key, value);
     }
   }
+});
+
+test("settings recover from bad storage and fit a smaller connected model", () => {
+  assert.deepEqual(parseSettings("bad JSON"), DEFAULT_SETTINGS);
+  assert.deepEqual(parseSettings(null), DEFAULT_SETTINGS);
+  assert.equal(parseSettings(JSON.stringify({ outputTokens: 512 })).outputTokens, 512);
+  const fitted = fitSettings({ ...DEFAULT_SETTINGS, outputTokens: 100000 }, { ...SETTINGS_MAX, contextTokens: 4096 });
+  assert.equal(fitted.contextTokens, 4096);
+  assert.ok(fitted.outputTokens + fitted.safetyTokens < fitted.contextTokens);
+  assert.throws(() => parseServerLimits({ contextTokens: 4096 }));
+  assert.equal(parseServerLimits({ ...SETTINGS_MAX, contextTokens: 4096 }).contextTokens, 4096);
+});
+
+test("backend validates all settings and rejects contradictory budgets", () => {
+  const settings = { ...DEFAULT_SETTINGS, contextTokens: 2048, outputTokens: 512, inputCharacters: 10 };
+  assert.equal(validateInput({ messages: [{ role: "user", content: "Hello" }], settings }).max_tokens, 512);
+  assert.throws(() => validateSettings({ ...settings, contextTokens: 512 }));
+  for (const [key, value] of Object.entries({ inputCharacters: 0, outputTokens: 10241, contextTokens: 40961, historyMessages: 800, historyBytes: 580001, requestBytes: 640001, timeoutSeconds: 2401, safetyTokens: -1 }))
+    assert.throws(() => validateSettings({ ...settings, [key]: value }));
+  assert.throws(() => validateSettings({ ...settings, timeoutSeconds: 1.5 }));
+  assert.throws(() => validateSettings({ ...settings, outputTokens: "512" }));
+  assert.throws(() => validateSettings({ ...settings, unknown: 1 }));
+  assert.throws(() => validateInput({ messages: [{ role: "user", content: "x".repeat(11) }], settings }));
+  assert.throws(() => validateInput({ messages: [{ role: "user", content: "Hello" }], max_tokens: 7680, settings }));
+});
+
+test("history fitting removes whole exchanges and accounts for UTF-8 and request overhead", () => {
+  const messages = [{ role: "user", content: "old" }, { role: "assistant", content: "answer" }, { role: "user", content: "你好 🌱" }];
+  const settings = { ...DEFAULT_SETTINGS, historyMessages: 1 };
+  assert.deepEqual(fitMessages(messages, settings, 0.7), messages.slice(2));
+  assert.equal(messages.length, 3);
+  assert.ok(jsonBytes(messages) > JSON.stringify(messages).length);
+  const large = [{ role: "user", content: "x".repeat(750) }, { role: "assistant", content: "y".repeat(750) }, messages[2]];
+  assert.deepEqual(fitMessages(large, { ...DEFAULT_SETTINGS, requestBytes: 1024 }, 0.7), messages.slice(2));
+  assert.throws(() => fitMessages([{ role: "user", content: "x".repeat(1024) }], { ...DEFAULT_SETTINGS, requestBytes: 1024 }, 0.7));
+  assert.throws(() => validateInput({ messages: large, settings: { ...DEFAULT_SETTINGS, historyMessages: 1 } }));
+  assert.throws(() => validateInput({ messages: large, settings: { ...DEFAULT_SETTINGS, requestBytes: 1024 } }));
 });

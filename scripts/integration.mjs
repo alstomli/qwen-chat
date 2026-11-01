@@ -36,7 +36,8 @@ try {
   assert.equal(login.status, 200);
   const cookie = login.headers.get('set-cookie').split(';')[0]; headers.Cookie = cookie;
   const status = await (await fetch(base + '/api/status', { headers: { Cookie: cookie } })).json();
-  assert.deepEqual(status, { mode: 'live', ready: true });
+  assert.equal(status.mode, 'live'); assert.equal(status.ready, true);
+  assert.equal(status.limits.contextTokens, 40960);
   console.log('PASS: Real HTTP login, cross-origin protection, and gateway health');
   const chat = messages => fetch(base + '/api/chat', { method: 'POST', headers, body: JSON.stringify({ messages, max_tokens: 384 }) });
   let response = await chat([{ role: 'user', content: 'Hello' }]);
@@ -45,6 +46,11 @@ try {
   response = await chat([{ role: 'user', content: 'old' }, { role: 'assistant', content: 'answer' }, { role: 'user', content: 'new' }]);
   assert.equal(response.headers.get('X-Context-Trimmed'), '2'); await response.text();
   assert.equal((await chat([{ role: 'system', content: 'override' }])).status, 400);
+  const settings = { inputCharacters: 20, outputTokens: 512, contextTokens: 2048, historyMessages: 3, historyBytes: 4096, requestBytes: 8192, timeoutSeconds: 30, safetyTokens: 64 };
+  response = await fetch(base + '/api/chat', { method: 'POST', headers, body: JSON.stringify({ messages: [{ role: 'user', content: 'Configured request' }], max_tokens: 512, settings }) });
+  assert.equal(response.status, 200); assert.match(await response.text(), /\[DONE\]/);
+  response = await fetch(base + '/api/chat', { method: 'POST', headers, body: JSON.stringify({ messages: [{ role: 'user', content: 'x'.repeat(21) }], max_tokens: 512, settings }) });
+  assert.equal(response.status, 400);
   console.log('PASS: App → real gateway → model fixture streaming, context trimming, and validation');
   const abort = new AbortController();
   response = await fetch(base + '/api/chat', { method: 'POST', headers, signal: abort.signal, body: JSON.stringify({ messages: [{ role: 'user', content: 'slow' }] }) });

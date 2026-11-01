@@ -3,10 +3,12 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import { ArrowUp, ArrowUpRight, Check, ChevronDown, Code2, Compass, Copy, Feather, LoaderCircle, LogOut, Menu, MessageSquare, PanelLeftClose, Plus, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, X, RotateCcw } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { AdvancedSettings } from "@/components/advanced-settings";
+import { DEFAULT_SETTINGS, SETTINGS_MAX, SETTINGS_KEY, parseSettings, fitSettings, fitMessages, type ChatSettings } from "@/lib/chat-settings";
 import { consumeCompletion } from "@/lib/protocol";
 import { completedHistory, parseConversations, STORAGE_KEY, type Conversation, type Message } from "@/lib/storage";
 
-type Connection = { mode: "checking" | "live" | "preview" | "unconfigured"; ready: boolean };
+type Connection = { mode: "checking" | "live" | "preview" | "unconfigured"; ready: boolean; limits?: ChatSettings; error?: string };
 const starters = [
   { icon: Feather, label: "Find the right words", text: "Help me write a thoughtful email to reconnect with an old colleague. Keep it warm and natural.", caption: "A first draft, a fresh perspective" },
   { icon: Compass, label: "Make sense of something", text: "Explain how large language models work, using a simple everyday analogy.", caption: "Turn a big idea into a clear one" },
@@ -22,15 +24,23 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   const [activeId, setActiveId] = useState<string | null>(null); const [draft, setDraft] = useState(""); const [search, setSearch] = useState("");
   const [sidebar, setSidebar] = useState(false); const [settings, setSettings] = useState(false); const [deleting, setDeleting] = useState<string | null>(null);
   const [connection, setConnection] = useState<Connection>({ mode: "checking", ready: false });
-  const [busy, setBusy] = useState<string | null>(null); const [toast, setToast] = useState(""); const [maxTokens, setMaxTokens] = useState(768); const [temperature, setTemperature] = useState(0.7);
+  const [busy, setBusy] = useState<string | null>(null); const [toast, setToast] = useState(""); const [preferences, setPreferences] = useState<ChatSettings>(DEFAULT_SETTINGS); const [temperature, setTemperature] = useState(0.7);
   const controller = useRef<AbortController | null>(null); const textarea = useRef<HTMLTextAreaElement>(null); const searchInput = useRef<HTMLInputElement>(null); const bottom = useRef<HTMLDivElement>(null); const scroller = useRef<HTMLDivElement>(null); const follow = useRef(true); const dialog = useRef<HTMLDivElement>(null);
   const active = chats.find(c => c.id === activeId); const messages = active?.messages ?? [];
   const preview = connection.mode === "preview";
+  const limits = connection.limits ?? SETTINGS_MAX;
+  const effectiveSettings = fitSettings(preferences, limits);
 
   useEffect(() => {
     if (!authenticated) return;
     try { const stored = parseConversations(localStorage.getItem(STORAGE_KEY)); setChats(stored); setActiveId(stored[0]?.id ?? null); }
     catch { setToast("Your browser couldn't load saved conversations."); }
+    try {
+      const raw = localStorage.getItem(SETTINGS_KEY);
+      setPreferences(parseSettings(raw));
+      const temperature = JSON.parse(raw ?? "null")?.temperature;
+      if (typeof temperature === "number" && Number.isFinite(temperature) && temperature >= 0 && temperature <= 1.5) setTemperature(temperature);
+    } catch { setToast("Your browser couldn't load saved settings."); }
     setLoaded(true);
   }, [authenticated]);
   useEffect(() => {
@@ -38,6 +48,11 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(chats)); }
     catch { setToast("Browser storage is full. This conversation will only be available in this tab."); }
   }, [chats, loaded, authenticated]);
+  useEffect(() => {
+    if (!loaded || !authenticated) return;
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...preferences, temperature })); }
+    catch { setToast("Your browser couldn't save settings. They will only apply in this tab."); }
+  }, [preferences, temperature, loaded, authenticated]);
   useEffect(() => {
     if (!authenticated) return;
     let mounted = true;
@@ -85,19 +100,22 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   async function send(text = draft, history = messages) {
     text = text.trim(); if (!text || controller.current) return;
     if (chats.length >= 100 && !activeId) { setToast("You have 100 saved chats. Delete one before starting another."); return; }
-    if (text.length > 12000) { setToast("Please shorten your message to 12,000 characters or fewer."); return; }
+    if (!connection.ready || !connection.limits) { setToast(connection.error ?? "Wait for the server limits to be verified before sending."); return; }
+    if (text.length > effectiveSettings.inputCharacters) { setToast(`Please shorten your message to ${effectiveSettings.inputCharacters.toLocaleString()} characters or fewer.`); return; }
     const id = activeId ?? uid(); const responseId = uid();
     const pending: Message[] = [...history, { id: uid(), role: "user", content: text }, { id: responseId, role: "assistant", content: "" }];
-    const input = [...completedHistory(history), { role: "user", content: text }];
-    while ((input.length > 79 || new TextEncoder().encode(JSON.stringify(input)).length > 58000) && input.length > 1) input.splice(0, 2);
+    let input;
+    try { input = fitMessages([...completedHistory(history), { role: "user", content: text }], effectiveSettings, temperature); }
+    catch (error) { setToast(error instanceof Error ? error.message : "Message exceeds your configured limits."); return; }
+    const locallyTrimmed = input.length < completedHistory(history).length + 1;
     setChats(prev => [{ id, title: active?.title ?? text.slice(0, 48), updatedAt: Date.now(), messages: pending }, ...prev.filter(c => c.id !== id)]);
     setActiveId(id); setDraft(""); setSidebar(false); follow.current = true;
     const abort = new AbortController(); controller.current = abort; setBusy(id);
     try {
-      const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: input, max_tokens: maxTokens, temperature }), signal: abort.signal });
+      const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: input, max_tokens: effectiveSettings.outputTokens, temperature, settings: effectiveSettings }), signal: abort.signal });
       if (!response.ok || !response.body) { if (response.status === 401) setAuthenticated(false); throw new Error((await response.json()).error ?? "Couldn't start a reply."); }
       const trimmed = Number(response.headers.get("X-Context-Trimmed") ?? 0);
-      if (trimmed) updateMessage(id, responseId, { note: "Earlier messages were omitted to fit the model's context." });
+      if (trimmed || locallyTrimmed) updateMessage(id, responseId, { note: "Earlier messages were omitted to fit the model's context." });
       await consumeCompletion(response.body, delta => updateMessage(id, responseId, m => ({ content: m.content + delta })), reason => {
         if (reason === "length") updateMessage(id, responseId, { note: "Response length reached. Ask me to continue for more." });
       });
@@ -115,7 +133,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   }
   function trapFocus(event: React.KeyboardEvent) {
     if (event.key !== "Tab") return;
-    const items = dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input, select, a[href]'); if (!items?.length) return;
+    const items = dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href]'); if (!items?.length) return;
     const first = items[0], last = items[items.length - 1];
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
@@ -146,10 +164,10 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
         {!messages.length ? <div className="welcome"><div className="welcome-mark" aria-hidden="true"><span>✳</span><i/></div><div className="eyebrow">A FRESH CONVERSATION</div><h1>A little curiosity.<br/><em>A lot of possibility.</em></h1><p>Your space to think, write, and work things out.</p><div className="starter-grid">{starters.map(card => <button className="starter-card" key={card.label} onClick={() => { setDraft(card.text); textarea.current?.focus(); }}><div><card.icon size={20} strokeWidth={1.45}/><ArrowUpRight size={16}/></div><strong>{card.label}</strong><small>{card.caption}</small></button>)}</div></div>
         : <div className="message-list">{messages.map((message, index) => <article className={`message ${message.role}`} key={message.id}><div className="message-avatar">{message.role === "assistant" ? logo : "Z"}</div><div className="message-body"><div className="message-author">{message.role === "user" ? "You" : preview ? "Qwen · preview" : "Qwen"}{message.role === "assistant" && <span>ASSISTANT</span>}</div>{message.content ? message.role === "user" ? <p className="user-content">{message.content}</p> : <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: ({ children }) => <CodeBlock>{children}</CodeBlock>, a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> }}>{message.content}</ReactMarkdown></div> : busy === activeId && index === messages.length - 1 ? <div className="thinking" aria-label="Qwen is thinking"><span/><span/><span/></div> : null}{message.note && <div className={`message-note ${message.state === "error" ? "error" : ""}`} role={message.state === "error" ? "alert" : undefined}>{message.note}</div>}{message.role === "assistant" && busy !== activeId && <div className="message-actions">{message.content && <CopyButton text={message.content}/>} {index === messages.length - 1 && <button onClick={retry} disabled={!!busy}><RotateCcw size={14}/><span>Try again</span></button>}{message.state === "stopped" && <span>Stopped</span>}</div>}</div></article>)}<div ref={bottom}/></div>}
       </main>
-      <div className="composer-region"><div className="composer-wrap">{preview && <div className="preview-note"><Sparkles size={13}/> Local preview · sample replies, no model requests</div>}{connection.mode === "live" && !connection.ready && <div className="offline-note">Your model may be stopped or loading. You can try again when it’s ready.</div>}<form className="composer" onSubmit={e => { e.preventDefault(); void send(); }}><label className="sr-only" htmlFor="message">Message Qwen</label><textarea ref={textarea} id="message" placeholder="What’s on your mind?" value={draft} onChange={e => setDraft(e.target.value)} maxLength={12000} rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}/><div className="composer-bottom"><span className="composer-model">{logo} Qwen <span>27B</span></span><div className="composer-controls"><span className="enter-hint">Shift + Enter for a new line</span>{busy ? <button type="button" className="send-button stop-button" aria-label="Stop generation" onClick={() => controller.current?.abort()}><Square size={15} fill="currentColor"/></button> : <button className="send-button" aria-label="Send message" disabled={!draft.trim()}><ArrowUp size={20}/></button>}</div></div></form><p className="composer-footer">A helpful second perspective. Always give important details a second look.</p></div></div>
+      <div className="composer-region"><div className="composer-wrap">{preview && <div className="preview-note"><Sparkles size={13}/> Local preview · sample replies, no model requests</div>}{connection.mode === "live" && !connection.ready && <div className="offline-note">Your model may be stopped or loading. You can try again when it’s ready.</div>}<form className="composer" onSubmit={e => { e.preventDefault(); void send(); }}><label className="sr-only" htmlFor="message">Message Qwen</label><textarea ref={textarea} id="message" placeholder="What’s on your mind?" value={draft} onChange={e => setDraft(e.target.value)} maxLength={effectiveSettings.inputCharacters} rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}/><div className="composer-bottom"><span className="composer-model">{logo} Qwen <span>27B</span></span><div className="composer-controls"><span className="enter-hint">Shift + Enter for a new line</span>{busy ? <button type="button" className="send-button stop-button" aria-label="Stop generation" onClick={() => controller.current?.abort()}><Square size={15} fill="currentColor"/></button> : <button className="send-button" aria-label="Send message" disabled={!draft.trim()}><ArrowUp size={20}/></button>}</div></div></form><p className="composer-footer">A helpful second perspective. Always give important details a second look.</p></div></div>
     </div>
     {toast && <div className="toast" role="status">{toast}<button onClick={() => setToast("")} aria-label="Dismiss notification"><X size={14}/></button></div>}
-    {(settings || deleting) && <div className="modal-backdrop" onClick={() => { setSettings(false); setDeleting(null); }}><div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" ref={dialog} onKeyDown={trapFocus} onClick={e => e.stopPropagation()}><button className="icon-button close-dialog" onClick={() => { setSettings(false); setDeleting(null); }} aria-label="Close dialog"><X size={20}/></button>{deleting ? <><div className="eyebrow">MAKE A LITTLE ROOM</div><h2 id="dialog-title">Delete this conversation?</h2><p>This removes the conversation from this browser. It can’t be undone.</p><div className="dialog-buttons"><button className="secondary-button" onClick={() => setDeleting(null)}>Keep conversation</button><button className="danger-button" onClick={() => { if (busy === deleting) controller.current?.abort(); setChats(prev => prev.filter(c => c.id !== deleting)); if (activeId === deleting) setActiveId(null); setDeleting(null); }}>Delete conversation</button></div></> : <><div className="eyebrow">MAKE YOURSELF AT HOME</div><h2 id="dialog-title">Your workspace</h2><div className="setting-status"><span className={`status-dot ${connection.ready ? "ready" : ""}`}/><div><strong>{preview ? "Local preview" : connection.mode === "unconfigured" ? "Model connection needed" : connection.ready ? "Your model is ready" : "Model unavailable"}</strong><p>{preview ? "Explore the interface with sample replies. These aren't generated by your model." : connection.mode === "unconfigured" ? "Connect your Runpod model to start chatting." : connection.ready ? "Connected to your personal Qwen model." : "Your Pod may be stopped or warming up."}</p></div></div><label className="setting-label" htmlFor="length">Response length<select id="length" value={maxTokens} onChange={e => setMaxTokens(Number(e.target.value))}><option value={384}>Concise · 384 tokens</option><option value={768}>Balanced · 768 tokens</option><option value={1024}>Detailed · 1,024 tokens</option></select></label><label className="setting-label" htmlFor="temperature">Creativity <span>{temperature.toFixed(1)}</span><input id="temperature" type="range" min="0" max="1.5" step="0.1" value={temperature} onChange={e => setTemperature(Number(e.target.value))}/></label><p className="settings-footnote">Chats stay in this browser. In live mode, messages you send are processed by your model. Older messages may be omitted to fit its context.</p><button className="signout-button" onClick={logout}><LogOut size={16}/> Sign out</button></>}</div></div>}
+    {(settings || deleting) && <div className="modal-backdrop" onClick={() => { setSettings(false); setDeleting(null); }}><div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" ref={dialog} onKeyDown={trapFocus} onClick={e => e.stopPropagation()}><button className="icon-button close-dialog" onClick={() => { setSettings(false); setDeleting(null); }} aria-label="Close dialog"><X size={20}/></button>{deleting ? <><div className="eyebrow">MAKE A LITTLE ROOM</div><h2 id="dialog-title">Delete this conversation?</h2><p>This removes the conversation from this browser. It can’t be undone.</p><div className="dialog-buttons"><button className="secondary-button" onClick={() => setDeleting(null)}>Keep conversation</button><button className="danger-button" onClick={() => { if (busy === deleting) controller.current?.abort(); setChats(prev => prev.filter(c => c.id !== deleting)); if (activeId === deleting) setActiveId(null); setDeleting(null); }}>Delete conversation</button></div></> : <><div className="eyebrow">MAKE YOURSELF AT HOME</div><h2 id="dialog-title">Your workspace</h2><div className="setting-status"><span className={`status-dot ${connection.ready ? "ready" : ""}`}/><div><strong>{preview ? "Local preview" : connection.mode === "unconfigured" ? "Model connection needed" : connection.ready ? "Your model is ready" : "Model unavailable"}</strong><p>{preview ? "Explore the interface with sample replies. These aren't generated by your model." : connection.mode === "unconfigured" ? "Connect your Runpod model to start chatting." : connection.ready ? "Connected to your personal Qwen model." : "Your Pod may be stopped or warming up."}</p></div></div><label className="setting-label" htmlFor="temperature">Creativity <span>{temperature.toFixed(1)}</span><input id="temperature" type="range" min="0" max="1.5" step="0.1" value={temperature} onChange={e => setTemperature(Number(e.target.value))}/></label><AdvancedSettings key={JSON.stringify(limits)} value={effectiveSettings} limits={limits} preview={preview} available={connection.ready && !!connection.limits} busy={!!busy} onApply={next => { setPreferences(next); setToast("Settings saved for your next request."); }}/>{connection.error && <p className="form-error" role="status">{connection.error}</p>}<p className="settings-footnote">Chats stay in this browser. In live mode, messages you send are processed by your model. Older messages may be omitted to fit its context.</p><button className="signout-button" onClick={logout}><LogOut size={16}/> Sign out</button></>}</div></div>}
   </div>;
 }
 

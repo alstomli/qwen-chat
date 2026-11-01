@@ -2,7 +2,7 @@
 
 A personal chat workspace for the existing Qwen model on Runpod. The frontend and server-side API are built with Next.js 16, React 19, and TypeScript, ready for a later Vercel deployment.
 
-**Current status:** the frontend is built locally and has not been deployed to Vercel. Runpod Pod `hrqjt6otlehqgh` uses inference image `zihan000/qwen-inference:0.2.0`, including automatic chat gateway and monitoring startup. The local `.env.local` points to the authenticated live gateway at `https://hrqjt6otlehqgh-8001.proxy.runpod.net`, and preview mode is disabled. On each Pod restart, the model needs to load and warm up before chat and live metrics are available.
+**Current status (November 1, 2026):** the production frontend is running on this PC at `http://127.0.0.1:3001`; it has not been deployed to Vercel. Active Runpod Pod `fj04zaugwd1u83` uses `zihan000/qwen-inference:0.3.0`, with authenticated chat and monitoring startup. The model is ready and advertises a verified 40,960-token context ceiling. Frontend Advanced settings are enforced by the deployed gateway. The local `.env.local` points to `https://fj04zaugwd1u83-8001.proxy.runpod.net`; preview mode is disabled. The frontend stops when its local process or PC stops.
 
 ## Run locally
 
@@ -32,7 +32,7 @@ No database, paid chat provider, or OpenAI account is required. The app is confi
 - Streaming replies; stop generation, retry, copy response/code, Markdown, tables, and safe links.
 - Multiple conversations, search, new chat, confirmed deletion, and recovery after a page reload.
 - Desktop and mobile layouts, keyboard submission, accessible labels, and reduced-motion support.
-- Adjustable response length (384/768/1024 tokens) and creativity.
+- Persistent Advanced settings for input characters, output tokens, context tokens, history messages/bytes, request bytes, generation timeout, and safety tokens, plus adjustable creativity.
 - Personal password login, expiring signed HttpOnly sessions, same-origin mutation checks, and bounded request bodies.
 - Live readiness checks and clear offline, loading, interrupted, and context-limit messages.
 - Conversations are stored in this browser's local storage, not synced between devices or encrypted by the app. In live mode the selected conversation history is sent through the Vercel server and Runpod gateway to your model. The app and gateway do not log prompts or replies; hosting platforms may retain operational metadata.
@@ -49,7 +49,7 @@ The source for the gateway and its startup integration is in the [llm-inference-
 
 - `scripts/chat-gateway.py`: authenticated `/health` and streaming `POST /v1/chat/completions` only. Model-management, metrics, docs, and arbitrary upstream paths are not exposed.
 - `scripts/start-server.sh`: `CHAT_ENABLED=true` starts the gateway automatically; `METRICS_ENABLED=true` retains automatic monitoring. A service failure stops the launcher and other services. This is not a guarantee of automatic host recovery.
-- `Dockerfile`: includes the gateway without any secrets. The live release is `zihan000/qwen-inference:0.2.0`; the local test image is `zihan000/qwen-inference:chat-dev`. Do not replace published release tags when changing code.
+- `Dockerfile`: includes the gateway without any secrets. The live release is `zihan000/qwen-inference:0.3.0`; the local test image is `zihan000/qwen-inference:chat-dev`. Do not replace published release tags when changing code.
 
 The following settings were applied to the existing Pod; retain them when replacing it:
 
@@ -59,7 +59,11 @@ The following settings were applied to the existing Pod; retain them when replac
 4. Set this app's `RUNPOD_CHAT_URL` to the gateway's HTTPS origin, without `/v1` or another path. Set the matching `RUNPOD_CHAT_TOKEN`, then restart/redeploy the frontend.
 5. Verify authentication failures, streaming, cancellation, Pod restart, and monitoring before relying on the live connection.
 
-The gateway uses vLLM's `/tokenize` endpoint to count the exact chat template, reserves space for the reply, and drops the oldest full exchanges until the request fits the configured 4,096-token context. A single message that cannot fit is rejected. One generation is allowed at a time, with a per-process limit of 20 accepted requests per minute. This matches the existing single-sequence model. The UI also caps histories to fit its request body limit.
+The gateway uses vLLM's `/tokenize` endpoint to count the exact chat template, reserves space for the reply plus the configured safety reserve (default 32 tokens), and drops the oldest full exchanges until the request fits the configured context (local default: 40,960 tokens). A single message that cannot fit is rejected. One generation is allowed at a time, with a per-process limit of 20 accepted requests per minute. This matches the existing single-sequence model. The composer allows 120,000 characters; the UI retains at most 799 messages within a 580,000-byte serialized history budget. The API and gateway accept request bodies up to 640,000 bytes and output budgets of 128–10,240 tokens (default 7,680). Character and byte limits do not guarantee that a message fits the token budget. Open **Your workspace → Advanced settings**, enter values, and choose **Apply settings**. Preferences and creativity are saved in this browser; **Reset defaults** restores the limit defaults for the current server. Changes affect the next request and do not modify an active reply. The frontend removes oldest full exchanges to satisfy history and complete-request byte budgets; an oversized newest message is rejected. Both backend layers validate settings, and the gateway enforces them even for direct API requests.
+
+The gateway advertises versioned limits through authenticated `/health`, reads actual `max_model_len` from private vLLM `/v1/models`, and rechecks capacity for each generation. Context is capped by both that value and `MAX_MODEL_LEN`. A smaller connected server automatically lowers effective browser budgets. The displayed ranges are deployment ceilings, not values the browser can override: raising ceilings requires updating server configuration/code and redeploying. The timeout ranges from 1 to 2,400 seconds and covers tokenization, model prefill, and streaming; the safety reserve ranges from 0 to 4,096 tokens. Output plus reserve must leave space for input.
+
+Deploy both updated projects together. An older gateway cannot enforce these settings; the frontend reports that it needs updating rather than silently ignoring preferences. The 40,960-token serving configuration started successfully on the live GPU. Live smoke tests verified a 128-token output cap, a 5-character input rejection, a 512-token context budget trimming one old exchange, and rejection above the deployed context ceiling. These checks do not benchmark maximum-length generation or sustained load. Existing Pod `MAX_MODEL_LEN` overrides still take precedence.
 
 ## Later Vercel deployment
 
@@ -72,7 +76,7 @@ Import this folder as a Next.js project using a supported Node.js 22+ runtime. A
 | `RUNPOD_CHAT_URL` | HTTPS origin of the deployed chat gateway |
 | `RUNPOD_CHAT_TOKEN` | Matching separate chat gateway token |
 
-Never use `NEXT_PUBLIC_` for credentials. Local preview is forcibly disabled in production, even if `CHAT_PREVIEW_MODE=true`; missing gateway configuration returns an honest setup/unavailable response. The chat route allows up to 300 seconds, with shorter internal model and proxy timeouts. Check the eventual Vercel plan limits before deploying. Login throttling is best-effort per server instance; it is not a distributed account lockout. Add centralized rate limiting and proper user accounts before opening the app to multiple people.
+Never use `NEXT_PUBLIC_` for credentials. Local preview is forcibly disabled in production, even if `CHAT_PREVIEW_MODE=true`; missing gateway configuration returns an honest setup/unavailable response. The chat route allows up to 3,000 seconds, with shorter internal model and proxy timeouts. Check the eventual Vercel plan limits before deploying. Login throttling is best-effort per server instance; it is not a distributed account lockout. Add centralized rate limiting and proper user accounts before opening the app to multiple people.
 
 No Vercel project, GitHub repository, or frontend cloud deployment was created. The live model and chat gateway run on the existing Runpod Pod.
 

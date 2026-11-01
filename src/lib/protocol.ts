@@ -1,10 +1,11 @@
+import { validateSettings, jsonBytes, type ChatSettings } from "./chat-settings";
 export type ChatMessage = { role: "user" | "assistant"; content: string };
-export type ChatInput = { messages: ChatMessage[]; max_tokens: number; temperature: number };
+export type ChatInput = { messages: ChatMessage[]; max_tokens: number; temperature: number; settings: ChatSettings };
 
 export function validateInput(value: unknown): ChatInput {
   if (!value || typeof value !== "object") throw new Error("Please send a message.");
   const data = value as Record<string, unknown>;
-  if (!Array.isArray(data.messages) || !data.messages.length || data.messages.length > 80)
+  if (!Array.isArray(data.messages) || !data.messages.length || data.messages.length > 800)
     throw new Error("Start a new conversation or send fewer messages.");
   const messages = data.messages.map((item: unknown, index: number): ChatMessage => {
     if (!item || typeof item !== "object") throw new Error("Invalid conversation.");
@@ -14,13 +15,21 @@ export function validateInput(value: unknown): ChatInput {
     return { role: m.role as ChatMessage["role"], content: m.content };
   });
   if (messages.at(-1)?.role !== "user") throw new Error("The last message must be yours.");
-  const max_tokens = data.max_tokens ?? 768;
+  const settings = validateSettings(data.settings);
+  const max_tokens = data.max_tokens ?? settings.outputTokens;
   const temperature = data.temperature ?? 0.7;
-  if (typeof max_tokens !== "number" || !Number.isInteger(max_tokens) || max_tokens < 128 || max_tokens > 1024)
-    throw new Error("Choose a response length between 128 and 1024 tokens.");
+  if (typeof max_tokens !== "number" || !Number.isInteger(max_tokens) || max_tokens < 128 || max_tokens > 10240)
+    throw new Error("Choose a response length between 128 and 10240 tokens.");
   if (typeof temperature !== "number" || !Number.isFinite(temperature) || temperature < 0 || temperature > 1.5)
     throw new Error("Temperature must be between 0 and 1.5.");
-  return { messages, max_tokens, temperature };
+  if (data.settings !== undefined && max_tokens !== settings.outputTokens) throw new Error("Conflicting output budget.");
+  settings.outputTokens = max_tokens;
+  validateSettings(settings);
+  if (messages.at(-1)!.content.length > settings.inputCharacters) throw new Error("Input character limit exceeded.");
+  if (messages.length > settings.historyMessages || jsonBytes(messages) > settings.historyBytes) throw new Error("History limit exceeded.");
+  const input = { messages, max_tokens, temperature, settings };
+  if (jsonBytes({ ...input, stream: true }) > settings.requestBytes) throw new Error("Request byte limit exceeded.");
+  return input;
 }
 
 /** Decode SSE across arbitrary network boundaries, including split UTF-8 characters. */

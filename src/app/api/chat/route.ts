@@ -1,8 +1,9 @@
 import { requestAuthenticated, sameOrigin } from "@/lib/auth";
-import { connectionConfig, jsonError, readJson } from "@/lib/server";
+import { connectionConfig, gatewayLimits, jsonError, readJson } from "@/lib/server";
 import { validateInput } from "@/lib/protocol";
+import { validateSettings } from "@/lib/chat-settings";
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 3000;
 export const dynamic = "force-dynamic";
 const streamHeaders = { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no" };
 
@@ -10,7 +11,11 @@ export async function POST(request: Request) {
   if (!requestAuthenticated(request)) return jsonError("Your session expired. Sign in to continue.", 401);
   if (!sameOrigin(request)) return jsonError("This request isn't allowed.", 403);
   let input;
-  try { input = validateInput(await readJson(request)); }
+  try {
+    input = validateInput(await readJson(request, value => validateSettings(
+      value && typeof value === "object" ? (value as Record<string, unknown>).settings : undefined,
+    ).requestBytes));
+  }
   catch (error) { return jsonError(error instanceof Error ? error.message : "Invalid message.", 400); }
   try {
     const config = connectionConfig();
@@ -34,10 +39,12 @@ export async function POST(request: Request) {
       });
       return new Response(stream, { headers: { ...streamHeaders, "X-Chat-Mode": "preview" } });
     }
+    try { validateSettings(input.settings, await gatewayLimits(config)); }
+    catch (error) { return jsonError(error instanceof Error ? error.message : "Gateway settings unavailable.", 400); }
     const controller = new AbortController();
     const cancel = () => controller.abort();
     request.signal.addEventListener("abort", cancel, { once: true });
-    const timer = setTimeout(cancel, 250_000);
+    const timer = setTimeout(cancel, input.settings.timeoutSeconds * 1000);
     let upstream: Response;
     try {
       upstream = await fetch(config.base + "/v1/chat/completions", {

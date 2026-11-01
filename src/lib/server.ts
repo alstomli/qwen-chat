@@ -1,5 +1,6 @@
-export const MAX_BODY = 64_000;
-export async function readJson(request: Request) {
+import { SETTINGS_MAX, parseServerLimits } from "./chat-settings";
+export const MAX_BODY = SETTINGS_MAX.requestBytes;
+export async function readJson(request: Request, limitForValue?: (value: unknown) => number) {
   if (!request.headers.get("content-type")?.includes("application/json")) throw new Error("Expected a JSON request.");
   if (Number(request.headers.get("content-length")) > MAX_BODY) throw new Error("This conversation is too large. Start a new chat.");
   const reader = request.body?.getReader();
@@ -15,8 +16,11 @@ export async function readJson(request: Request) {
   } finally { reader.releaseLock(); }
   const merged = new Uint8Array(bytes); let offset = 0;
   for (const part of parts) { merged.set(part, offset); offset += part.byteLength; }
-  try { return JSON.parse(new TextDecoder().decode(merged)); }
+  let value: unknown;
+  try { value = JSON.parse(new TextDecoder().decode(merged)); }
   catch { throw new Error("Invalid request. Please try again."); }
+  if (limitForValue && bytes > limitForValue(value)) throw new Error("This request exceeds your configured byte limit.");
+  return value;
 }
 export function connectionConfig() {
   const base = process.env.RUNPOD_CHAT_URL?.replace(/\/$/, "");
@@ -28,5 +32,12 @@ export function connectionConfig() {
     return { mode: "live" as const, base, token };
   }
   return { mode: process.env.NODE_ENV !== "production" && process.env.CHAT_PREVIEW_MODE === "true" ? "preview" as const : "unconfigured" as const, base: "", token: "" };
+}
+export async function gatewayLimits(config: ReturnType<typeof connectionConfig>) {
+  const response = await fetch(config.base + "/health", { headers: { Authorization: "Bearer " + config.token }, cache: "no-store", signal: AbortSignal.timeout(5000) });
+  if (!response.ok) throw new Error("The model is unavailable or still loading.");
+  const body = await response.json();
+  if (body.settingsVersion !== 1) throw new Error("Update the chat gateway to use configurable settings.");
+  return parseServerLimits(body.limits);
 }
 export const jsonError = (error: string, status: number) => Response.json({ error }, { status, headers: { "Cache-Control": "no-store" } });
