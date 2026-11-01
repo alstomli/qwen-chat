@@ -76,7 +76,7 @@ Import this folder as a Next.js project using a supported Node.js 22+ runtime. A
 | `RUNPOD_CHAT_URL` | HTTPS origin of the deployed chat gateway |
 | `RUNPOD_CHAT_TOKEN` | Matching separate chat gateway token |
 
-Never use `NEXT_PUBLIC_` for credentials. Local preview is forcibly disabled in production, even if `CHAT_PREVIEW_MODE=true`; missing gateway configuration returns an honest setup/unavailable response. The chat route allows up to 3,000 seconds, with shorter internal model and proxy timeouts. Check the eventual Vercel plan limits before deploying. Login throttling is best-effort per server instance; it is not a distributed account lockout. Add centralized rate limiting and proper user accounts before opening the app to multiple people.
+Never use `NEXT_PUBLIC_` for credentials. Local preview is forcibly disabled in production, even if `CHAT_PREVIEW_MODE=true`; missing gateway configuration returns an honest setup/unavailable response. The chat route declares a 300-second maximum execution time for Vercel Hobby compatibility. This includes validation, waiting for the model, and streaming the reply. The configurable generation timeout can be longer locally, but it does not override Vercel’s execution limit; on Vercel, choose a timeout below 300 seconds. Login throttling is best-effort per server instance; it is not a distributed account lockout. Add centralized rate limiting and proper user accounts before opening the app to multiple people.
 
 No Vercel project, GitHub repository, or frontend cloud deployment was created. The live model and chat gateway run on the existing Runpod Pod.
 

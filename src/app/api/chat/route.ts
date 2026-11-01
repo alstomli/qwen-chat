@@ -3,7 +3,7 @@ import { connectionConfig, gatewayLimits, jsonError, readJson } from "@/lib/serv
 import { validateInput } from "@/lib/protocol";
 import { validateSettings } from "@/lib/chat-settings";
 export const runtime = "nodejs";
-export const maxDuration = 3000;
+export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 const streamHeaders = { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no" };
 
