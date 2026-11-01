@@ -7,6 +7,7 @@ export async function POST(request: Request) {
   if (!allowLogin(request.headers.get("x-forwarded-for")?.split(",")[0] ?? "local")) return jsonError("Too many attempts. Please wait a minute.", 429);
   try {
     const body = await readJson(request);
+    if (!body || typeof body !== "object" || Array.isArray(body) || !("password" in body)) return jsonError("Please enter your workspace password.", 400);
     if (typeof body.password !== "string" || body.password.length > 256 || !passwordMatches(body.password)) return jsonError("That password isn't right. Please try again.", 401);
     return Response.json({ ok: true }, { headers: { "Set-Cookie": cookieHeader(issueSession()), "Cache-Control": "no-store" } });
   } catch { return jsonError("Please enter your workspace password.", 400); }
