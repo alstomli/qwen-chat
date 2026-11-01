@@ -2,7 +2,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 export const COOKIE = "qwen_session";
 const lifetime = 60 * 60 * 24;
 function digest(value: string) { return createHash("sha256").update(value).digest(); }
-export function credentialsConfigured() { return (process.env.CHAT_PASSWORD?.length ?? 0) >= 16 && (process.env.SESSION_SECRET?.length ?? 0) >= 32; }
+export function credentialsConfigured() { return (process.env.CHAT_PASSWORD?.length ?? 0) > 0 && (process.env.SESSION_SECRET?.length ?? 0) >= 32; }
 export function passwordMatches(password: string) {
   return credentialsConfigured() && timingSafeEqual(digest(password), digest(process.env.CHAT_PASSWORD!));
 }

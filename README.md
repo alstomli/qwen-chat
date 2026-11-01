@@ -67,7 +67,7 @@ Import this folder as a Next.js project using a supported Node.js 22+ runtime. A
 
 | Variable | Purpose |
 | --- | --- |
-| `CHAT_PASSWORD` | A strong personal workspace password, at least 16 characters |
+| `CHAT_PASSWORD` | A non-empty personal workspace password; no minimum length |
 | `SESSION_SECRET` | Random signing secret, at least 32 characters |
 | `RUNPOD_CHAT_URL` | HTTPS origin of the deployed chat gateway |
 | `RUNPOD_CHAT_TOKEN` | Matching separate chat gateway token |

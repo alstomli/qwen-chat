@@ -1,11 +1,34 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { issueSession, validSession, passwordMatches, sameOrigin, allowLogin } from "../src/lib/auth";
+import { issueSession, validSession, passwordMatches, sameOrigin, allowLogin, credentialsConfigured } from "../src/lib/auth";
 import { consumeCompletion, validateInput } from "../src/lib/protocol";
 import { completedHistory, parseConversations } from "../src/lib/storage";
 import { connectionConfig, readJson } from "../src/lib/server";
 process.env.CHAT_PASSWORD = "test-password-only-123456789";
 process.env.SESSION_SECRET = "test-signing-secret-" + "x".repeat(40);
+
+test("short passwords work while missing credentials and weak session secrets stay blocked", () => {
+  const password = process.env.CHAT_PASSWORD; const secret = process.env.SESSION_SECRET;
+  try {
+    process.env.CHAT_PASSWORD = "x";
+    assert.equal(credentialsConfigured(), true);
+    assert.equal(passwordMatches("x"), true);
+    assert.equal(passwordMatches("wrong"), false);
+    assert.equal(validSession(issueSession()), true);
+    process.env.CHAT_PASSWORD = "";
+    assert.equal(credentialsConfigured(), false);
+    assert.equal(passwordMatches(""), false);
+    assert.throws(() => issueSession(), /not configured/);
+    delete process.env.CHAT_PASSWORD;
+    assert.equal(credentialsConfigured(), false);
+    process.env.CHAT_PASSWORD = "x"; process.env.SESSION_SECRET = "short";
+    assert.equal(credentialsConfigured(), false);
+    assert.equal(passwordMatches("x"), false);
+  } finally {
+    if (password === undefined) delete process.env.CHAT_PASSWORD; else process.env.CHAT_PASSWORD = password;
+    if (secret === undefined) delete process.env.SESSION_SECRET; else process.env.SESSION_SECRET = secret;
+  }
+});
 
 test("signed sessions reject tampering, expiration, malformed tokens and secret rotation", () => {
   const now = 1700000000000; const token = issueSession(now);
