@@ -7,14 +7,16 @@ export function AdvancedSettings({ value, limits, available, preview, busy, onAp
 }) {
   const [draft, setDraft] = useState(() => Object.fromEntries(SETTING_FIELDS.map(({ key }) => [key, String(value[key])])));
   const [error, setError] = useState("");
+  const [reuseCachedPrefixes, setReuseCachedPrefixes] = useState(value.reuseCachedPrefixes);
   function apply() {
     try {
-      const next = validateSettings(Object.fromEntries(SETTING_FIELDS.map(({ key }) => [key, draft[key] === "" ? NaN : Number(draft[key])])), limits);
+      const next = validateSettings({ ...Object.fromEntries(SETTING_FIELDS.map(({ key }) => [key, draft[key] === "" ? NaN : Number(draft[key])])), reuseCachedPrefixes }, limits);
       onApply(next); setError("");
     } catch (error) { setError(error instanceof Error ? error.message : "Invalid settings."); }
   }
   function reset() {
     const next = fitSettings(DEFAULT_SETTINGS, limits);
+    setReuseCachedPrefixes(next.reuseCachedPrefixes);
     setDraft(Object.fromEntries(SETTING_FIELDS.map(({ key }) => [key, String(next[key])])));
     setError(""); onApply(next);
   }
@@ -23,6 +25,11 @@ export function AdvancedSettings({ value, limits, available, preview, busy, onAp
     <p className="settings-help">Saved in this browser. Changes apply to your next request.</p>
     <p className="settings-help">{preview ? "Preview limits are shown below. A live connection will supply the running model’s context ceiling." : available ? <>Server context ceiling: <strong>{limits.contextTokens.toLocaleString()} tokens</strong>. Raising the server ceiling requires a vLLM restart.</> : "Connect to an updated gateway to verify server limits and apply settings."}</p>
     <fieldset disabled={busy || !available}>
+      <label className="prefix-cache-setting" htmlFor="reuse-cached-prefixes">
+        <input id="reuse-cached-prefixes" type="checkbox" role="switch" checked={reuseCachedPrefixes} disabled={!limits.reuseCachedPrefixes} aria-describedby="prefix-cache-help" onChange={event => { setReuseCachedPrefixes(event.target.checked); setError(""); }}/>
+        <span>Reuse cached prefixes</span>
+      </label>
+      <p id="prefix-cache-help" className="settings-help">Reuse earlier prompt processing for faster replies. Off recomputes the prompt for each request; it does not free reserved GPU memory.{!limits.reuseCachedPrefixes && " Update the gateway to change this setting."}</p>
       <div className="settings-grid">{SETTING_FIELDS.map(({ key, label, help }) => <label className="advanced-field" key={key} htmlFor={`setting-${key}`}>
         <span>{label}</span>
         <input id={`setting-${key}`} type="number" inputMode="numeric" min={SETTINGS_MIN[key]} max={limits[key]} step="1" value={draft[key]} aria-describedby={`help-${key}`} onChange={event => { setDraft(previous => ({ ...previous, [key]: event.target.value })); setError(""); }}/>

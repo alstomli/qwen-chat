@@ -8,14 +8,17 @@ export const DEFAULT_SETTINGS = {
   requestBytes: 640000,
   timeoutSeconds: 2400,
   safetyTokens: 32,
+  reuseCachedPrefixes: true,
 };
 export type ChatSettings = typeof DEFAULT_SETTINGS;
 export const SETTINGS_MAX: ChatSettings = { ...DEFAULT_SETTINGS, outputTokens: 10240, safetyTokens: 4096 };
 export const SETTINGS_MIN: ChatSettings = {
   inputCharacters: 1, outputTokens: 128, contextTokens: 256, historyMessages: 1,
   historyBytes: 128, requestBytes: 1024, timeoutSeconds: 1, safetyTokens: 0,
+  reuseCachedPrefixes: false,
 };
-export const SETTING_FIELDS: { key: keyof ChatSettings; label: string; help: string }[] = [
+type NumericSetting = Exclude<keyof ChatSettings, "reuseCachedPrefixes">;
+export const SETTING_FIELDS: { key: NumericSetting; label: string; help: string }[] = [
   { key: "inputCharacters", label: "Input character limit", help: "Maximum length of your newest message." },
   { key: "outputTokens", label: "Output token budget", help: "Maximum tokens generated per reply." },
   { key: "contextTokens", label: "Context token budget", help: "Input + output + safety reserve must fit." },
@@ -32,6 +35,8 @@ export function validateSettings(value: unknown, limits: ChatSettings = SETTINGS
   const data = value as Record<string, unknown>;
   if (Object.keys(data).some(key => !Object.hasOwn(DEFAULT_SETTINGS, key))) throw new Error("Unknown chat setting.");
   const result = { ...DEFAULT_SETTINGS, ...data } as ChatSettings;
+  if (typeof result.reuseCachedPrefixes !== "boolean") throw new Error("Reuse cached prefixes must be on or off.");
+  if (!result.reuseCachedPrefixes && !limits.reuseCachedPrefixes) throw new Error("Update the gateway to control prefix reuse.");
   for (const { key, label } of SETTING_FIELDS) {
     if (!Number.isInteger(result[key]) || result[key] < SETTINGS_MIN[key] || result[key] > limits[key])
       throw new Error(`${label} must be between ${SETTINGS_MIN[key]} and ${limits[key]}.`);
@@ -45,6 +50,7 @@ export function validateSettings(value: unknown, limits: ChatSettings = SETTINGS
 export function fitSettings(value: unknown, limits: ChatSettings = SETTINGS_MAX): ChatSettings {
   const data = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const result = { ...DEFAULT_SETTINGS };
+  result.reuseCachedPrefixes = limits.reuseCachedPrefixes && typeof data.reuseCachedPrefixes === "boolean" ? data.reuseCachedPrefixes : true;
   for (const { key } of SETTING_FIELDS) {
     const candidate = data[key];
     result[key] = Math.max(SETTINGS_MIN[key], Math.min(limits[key], typeof candidate === "number" && Number.isInteger(candidate) ? candidate : DEFAULT_SETTINGS[key]));
@@ -61,6 +67,7 @@ export function parseSettings(raw: string | null): ChatSettings {
 export function parseServerLimits(value: unknown): ChatSettings {
   if (!value || typeof value !== "object") throw new Error("Gateway settings are unavailable. Update the gateway first.");
   const result = { ...SETTINGS_MAX };
+  result.reuseCachedPrefixes = (value as Record<string, unknown>).reuseCachedPrefixes === true;
   for (const { key } of SETTING_FIELDS) {
     const candidate = (value as Record<string, unknown>)[key];
     if (typeof candidate !== "number" || !Number.isInteger(candidate) || candidate < SETTINGS_MIN[key]) throw new Error("Invalid gateway limits.");
@@ -70,6 +77,13 @@ export function parseServerLimits(value: unknown): ChatSettings {
 }
 
 export const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
+
+/** Keep the default request compatible with gateways predating this option. */
+export function gatewaySettings(settings: ChatSettings, limits: ChatSettings): Omit<ChatSettings, "reuseCachedPrefixes"> & { reuseCachedPrefixes?: boolean } {
+  validateSettings(settings, limits);
+  const { reuseCachedPrefixes, ...numeric } = settings;
+  return limits.reuseCachedPrefixes ? settings : numeric;
+}
 
 export function fitMessages<T extends { role: string; content: string }>(messages: T[], settings: ChatSettings, temperature: number): T[] {
   const result = [...messages];

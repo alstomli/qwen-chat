@@ -17,6 +17,8 @@
 .advanced-settings h3{font-size:16px;margin:0 0 8px}
 .settings-help{font-size:12px;line-height:1.6;color:#67715e;margin:8px 0 14px}
 .advanced-settings fieldset{border:0;padding:0;margin:0;min-width:0}
+.prefix-cache-setting{display:flex;align-items:center;gap:10px;font-size:13px;font-weight:600;margin-top:12px}
+.prefix-cache-setting input{width:18px;height:18px;accent-color:#566e42}
 .settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 20px}
 .advanced-field{display:flex;flex-direction:column;gap:7px;font-size:12px;font-weight:600}
 .advanced-field input{width:100%;min-width:0;border:1px solid #cbd2c4;border-radius:7px;padding:10px;background:#fff;color:#26341e;font:inherit;font-variant-numeric:tabular-nums}
