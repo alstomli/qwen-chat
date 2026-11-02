@@ -1,5 +1,6 @@
 import { requestAuthenticated, sameOrigin } from "@/lib/auth";
-import { connectionConfig, gatewayLimits, jsonError, readJson } from "@/lib/server";
+import { connectionConfig, gatewayCapabilities, diagnosticsAllowed, jsonError, readJson } from "@/lib/server";
+import { DIAGNOSTICS_HEADER, parseDiagnosticHeader } from "@/lib/diagnostics";
 import { validateInput } from "@/lib/protocol";
 import { validateSettings, gatewaySettings } from "@/lib/chat-settings";
 export const runtime = "nodejs";
@@ -10,6 +11,8 @@ const streamHeaders = { "Content-Type": "text/event-stream; charset=utf-8", "Cac
 export async function POST(request: Request) {
   if (!requestAuthenticated(request)) return jsonError("Your session expired. Sign in to continue.", 401);
   if (!sameOrigin(request)) return jsonError("This request isn't allowed.", 403);
+  const diagnosticRequested = request.headers.get(DIAGNOSTICS_HEADER) === "1";
+  if (diagnosticRequested && !diagnosticsAllowed()) return jsonError("Request diagnostics are disabled.", 403);
   let input;
   try {
     input = validateInput(await readJson(request, value => validateSettings(
@@ -21,6 +24,7 @@ export async function POST(request: Request) {
     const config = connectionConfig();
     if (config.mode === "unconfigured") return jsonError("The model connection hasn't been configured yet.", 503);
     if (config.mode === "preview") {
+      if (diagnosticRequested) return jsonError("Diagnostics require a live model connection.", 400);
       const encoder = new TextEncoder(); let timer: ReturnType<typeof setTimeout>; let index = 0;
       const words = previewReply(input.messages.at(-1)!.content).match(/\S+\s*/g) ?? [];
       const stream = new ReadableStream<Uint8Array>({
@@ -40,7 +44,11 @@ export async function POST(request: Request) {
       return new Response(stream, { headers: { ...streamHeaders, "X-Chat-Mode": "preview" } });
     }
     let settings;
-    try { settings = gatewaySettings(input.settings, await gatewayLimits(config)); }
+    try {
+      const capabilities = await gatewayCapabilities(config);
+      if (diagnosticRequested && capabilities.diagnosticsVersion !== 1) return jsonError("Enable diagnostics on an updated gateway first.", 503);
+      settings = gatewaySettings(input.settings, capabilities.limits);
+    }
     catch (error) { return jsonError(error instanceof Error ? error.message : "Gateway settings unavailable.", 400); }
     const controller = new AbortController();
     const cancel = () => controller.abort();
@@ -49,19 +57,23 @@ export async function POST(request: Request) {
     let upstream: Response;
     try {
       upstream = await fetch(config.base + "/v1/chat/completions", {
-        method: "POST", headers: { Authorization: "Bearer " + config.token, "Content-Type": "application/json" },
+        method: "POST", headers: { Authorization: "Bearer " + config.token, "Content-Type": "application/json", ...(diagnosticRequested ? { [DIAGNOSTICS_HEADER]: "1" } : {}) },
         body: JSON.stringify({ ...input, settings, stream: true }), signal: controller.signal, cache: "no-store"
       });
     } catch (error) {
       clearTimeout(timer); request.signal.removeEventListener("abort", cancel); throw error;
     }
+    const diagnostic = diagnosticRequested ? parseDiagnosticHeader(upstream.headers.get(DIAGNOSTICS_HEADER)) : null;
+    const diagnosticHeaders: Record<string, string> = diagnostic ? { [DIAGNOSTICS_HEADER]: JSON.stringify(diagnostic) } : {};
     if (!upstream.ok || !upstream.body) {
       clearTimeout(timer); request.signal.removeEventListener("abort", cancel);
       let message = "Your model is unavailable or still loading. Try again shortly.";
       if (upstream.status === 429) message = "Your model is answering another request. Try again in a moment.";
       if (upstream.status === 413 || upstream.status === 400) message = "This message is too long for the model. Shorten it or start a new chat.";
       await upstream.body?.cancel();
-      return jsonError(message, [400, 413, 429].includes(upstream.status) ? upstream.status : 503);
+      const response = jsonError(message, [400, 413, 429].includes(upstream.status) ? upstream.status : 503);
+      for (const [key, value] of Object.entries(diagnosticHeaders)) response.headers.set(key, value);
+      return response;
     }
     const reader = upstream.body.getReader();
     const finish = () => { clearTimeout(timer); request.signal.removeEventListener("abort", cancel); };
@@ -73,7 +85,7 @@ export async function POST(request: Request) {
         } catch (error) { finish(); controller.error(error); }
       }, async cancel() { cancel(); finish(); await reader.cancel().catch(() => {}); }
     });
-    return new Response(stream, { headers: { ...streamHeaders, "X-Context-Trimmed": upstream.headers.get("X-Context-Trimmed") ?? "0" } });
+    return new Response(stream, { headers: { ...streamHeaders, ...diagnosticHeaders, "X-Context-Trimmed": upstream.headers.get("X-Context-Trimmed") ?? "0" } });
   } catch { return jsonError("Couldn't reach your model. It may be stopped or loading. Please try again.", 503); }
 }
 function previewReply(prompt: string) {
