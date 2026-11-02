@@ -1,7 +1,7 @@
 import { requestAuthenticated, sameOrigin } from "@/lib/auth";
 import { connectionConfig, gatewayLimits, jsonError, readJson } from "@/lib/server";
 import { validateInput } from "@/lib/protocol";
-import { validateSettings } from "@/lib/chat-settings";
+import { validateSettings, gatewaySettings } from "@/lib/chat-settings";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
@@ -39,7 +39,8 @@ export async function POST(request: Request) {
       });
       return new Response(stream, { headers: { ...streamHeaders, "X-Chat-Mode": "preview" } });
     }
-    try { validateSettings(input.settings, await gatewayLimits(config)); }
+    let settings;
+    try { settings = gatewaySettings(input.settings, await gatewayLimits(config)); }
     catch (error) { return jsonError(error instanceof Error ? error.message : "Gateway settings unavailable.", 400); }
     const controller = new AbortController();
     const cancel = () => controller.abort();
@@ -49,7 +50,7 @@ export async function POST(request: Request) {
     try {
       upstream = await fetch(config.base + "/v1/chat/completions", {
         method: "POST", headers: { Authorization: "Bearer " + config.token, "Content-Type": "application/json" },
-        body: JSON.stringify({ ...input, stream: true }), signal: controller.signal, cache: "no-store"
+        body: JSON.stringify({ ...input, settings, stream: true }), signal: controller.signal, cache: "no-store"
       });
     } catch (error) {
       clearTimeout(timer); request.signal.removeEventListener("abort", cancel); throw error;

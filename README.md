@@ -1,5 +1,7 @@
 # Qwen Chat
 
+Advanced settings includes **Reuse cached prefixes**, on by default and saved in this browser. Turning it off makes the gateway isolate each request's prefix cache using a fresh server-generated salt. It does not free reserved GPU memory or disable cache writes. The toggle requires the companion inference-server gateway update; older gateways remain usable with the default behavior and the toggle disabled. Deploy the backend update before the frontend. Deployment requires separate approval.
+
 A personal chat workspace for the existing Qwen model on Runpod. The frontend and server-side API are built with Next.js 16, React 19, and TypeScript, ready for a later Vercel deployment.
 
 **Current status (November 1, 2026):** the production frontend is running on this PC at `http://127.0.0.1:3001`; it has not been deployed to Vercel. Active Runpod Pod `fj04zaugwd1u83` uses `zihan000/qwen-inference:0.3.0`, with authenticated chat and monitoring startup. The model is ready and advertises a verified 40,960-token context ceiling. Frontend Advanced settings are enforced by the deployed gateway. The local `.env.local` points to `https://fj04zaugwd1u83-8001.proxy.runpod.net`; preview mode is disabled. The frontend stops when its local process or PC stops.

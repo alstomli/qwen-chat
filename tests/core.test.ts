@@ -4,9 +4,24 @@ import { issueSession, validSession, passwordMatches, sameOrigin, allowLogin, cr
 import { consumeCompletion, validateInput } from "../src/lib/protocol";
 import { completedHistory, parseConversations } from "../src/lib/storage";
 import { connectionConfig, readJson } from "../src/lib/server";
-import { DEFAULT_SETTINGS, SETTINGS_MAX, fitSettings, parseSettings, parseServerLimits, validateSettings, fitMessages, jsonBytes } from "../src/lib/chat-settings";
+import { DEFAULT_SETTINGS, SETTINGS_MAX, fitSettings, parseSettings, parseServerLimits, validateSettings, fitMessages, jsonBytes, gatewaySettings } from "../src/lib/chat-settings";
 process.env.CHAT_PASSWORD = "test-password-only-123456789";
 process.env.SESSION_SECRET = "test-signing-secret-" + "x".repeat(40);
+
+test("prefix reuse defaults on, persists off, and requires gateway support", () => {
+  assert.equal(parseSettings(null).reuseCachedPrefixes, true);
+  assert.equal(parseSettings('{"outputTokens":512}').reuseCachedPrefixes, true);
+  assert.equal(parseSettings('{"reuseCachedPrefixes":false}').reuseCachedPrefixes, false);
+  const settings = { ...DEFAULT_SETTINGS, reuseCachedPrefixes: false };
+  assert.equal(validateInput({ messages: [{role: "user", content: "hello"}], settings }).settings.reuseCachedPrefixes, false);
+  for (const value of ["false", 0, null]) assert.throws(() => validateSettings({ reuseCachedPrefixes: value }));
+  const { reuseCachedPrefixes, ...oldLimits } = SETTINGS_MAX;
+  const limits = parseServerLimits(oldLimits);
+  assert.equal(limits.reuseCachedPrefixes, false);
+  assert.ok(!Object.hasOwn(gatewaySettings(DEFAULT_SETTINGS, limits), "reuseCachedPrefixes"));
+  assert.throws(() => gatewaySettings(settings, limits), /Update the gateway/);
+  assert.equal(gatewaySettings(settings, SETTINGS_MAX).reuseCachedPrefixes, false);
+});
 
 test("short passwords work while missing credentials and weak session secrets stay blocked", () => {
   const password = process.env.CHAT_PASSWORD; const secret = process.env.SESSION_SECRET;
