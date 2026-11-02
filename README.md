@@ -2,9 +2,9 @@
 
 Advanced settings includes **Reuse cached prefixes**, on by default and saved in this browser. Turning it off makes the gateway isolate each request's prefix cache using a fresh server-generated salt. It does not free reserved GPU memory or disable cache writes. The toggle requires the companion inference-server gateway update; older gateways remain usable with the default behavior and the toggle disabled. Deploy the backend update before the frontend. Deployment requires separate approval.
 
-A personal chat workspace for the existing Qwen model on Runpod. The frontend and server-side API are built with Next.js 16, React 19, and TypeScript, ready for a later Vercel deployment.
+A personal chat workspace for the existing Qwen model on Runpod. The frontend and server-side API are built with Next.js 16, React 19, and TypeScript, deployed on Vercel with optional local use.
 
-**Current status (November 1, 2026):** the production frontend is running on this PC at `http://127.0.0.1:3001`; it has not been deployed to Vercel. Active Runpod Pod `fj04zaugwd1u83` uses `zihan000/qwen-inference:0.3.0`, with authenticated chat and monitoring startup. The model is ready and advertises a verified 40,960-token context ceiling. Frontend Advanced settings are enforced by the deployed gateway. The local `.env.local` points to `https://fj04zaugwd1u83-8001.proxy.runpod.net`; preview mode is disabled. The frontend stops when its local process or PC stops.
+**Current status (November 2, 2026):** the production frontend is deployed at https://qwen38-chat-zh.vercel.app, with an optional local frontend at `http://127.0.0.1:3001`. Active Runpod Pod `rp93m3noz3l9lt` uses `zihan000/qwen-inference@sha256:e52015057d9e1826c059df3683790ceea28f7711c2692189e1535a75634417ba`, with authenticated chat and monitoring startup. The model is ready and advertises a verified 40,960-token context ceiling. Frontend Advanced settings are enforced by the deployed gateway. Vercel's Production and Preview `RUNPOD_CHAT_URL` and the local `.env.local` point to `https://rp93m3noz3l9lt-8001.proxy.runpod.net`; preview mode is disabled. Only the local frontend stops when its local process or PC stops.
 
 ## Run locally
 
@@ -44,7 +44,7 @@ No database, paid chat provider, or OpenAI account is required. The app is confi
 The configured flow is:
 
 ```text
-Browser → local Next.js /api/chat → token-protected Runpod gateway → private vLLM
+Browser → Next.js /api/chat (Vercel or local) → token-protected Runpod gateway → private vLLM
 ```
 
 The source for the gateway and its startup integration is in the [llm-inference-server repository](https://github.com/alstomli/llm-inference-server). For local integration checks, clone it beside this repository as `../llm-inference-server`:
@@ -67,7 +67,7 @@ The gateway advertises versioned limits through authenticated `/health`, reads a
 
 Deploy both updated projects together. An older gateway cannot enforce these settings; the frontend reports that it needs updating rather than silently ignoring preferences. The 40,960-token serving configuration started successfully on the live GPU. Live smoke tests verified a 128-token output cap, a 5-character input rejection, a 512-token context budget trimming one old exchange, and rejection above the deployed context ceiling. These checks do not benchmark maximum-length generation or sustained load. Existing Pod `MAX_MODEL_LEN` overrides still take precedence.
 
-## Later Vercel deployment
+## Vercel deployment
 
 Import this folder as a Next.js project using a supported Node.js 22+ runtime. Add these server-side environment variables:
 
@@ -80,7 +80,7 @@ Import this folder as a Next.js project using a supported Node.js 22+ runtime. A
 
 Never use `NEXT_PUBLIC_` for credentials. Local preview is forcibly disabled in production, even if `CHAT_PREVIEW_MODE=true`; missing gateway configuration returns an honest setup/unavailable response. The chat route declares a 300-second maximum execution time for Vercel Hobby compatibility. This includes validation, waiting for the model, and streaming the reply. The configurable generation timeout can be longer locally, but it does not override Vercel’s execution limit; on Vercel, choose a timeout below 300 seconds. Login throttling is best-effort per server instance; it is not a distributed account lockout. Add centralized rate limiting and proper user accounts before opening the app to multiple people.
 
-No Vercel project, GitHub repository, or frontend cloud deployment was created. The live model and chat gateway run on the existing Runpod Pod.
+The `qwen-chat` Vercel project serves https://qwen38-chat-zh.vercel.app. The live model and chat gateway run on the Runpod Pod. After a Pod migration, update `RUNPOD_CHAT_URL` for Production and Preview and redeploy Production to apply the new origin; existing Preview deployments retain their previous environment until redeployed.
 
 ## Verification
 
