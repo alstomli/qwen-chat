@@ -25,7 +25,7 @@ export const SETTING_FIELDS: { key: NumericSetting; label: string; help: string 
   { key: "historyMessages", label: "History message limit", help: "Includes the new message; oldest full exchanges are removed first." },
   { key: "historyBytes", label: "History byte limit", help: "UTF-8 size of messages sent to the model gateway." },
   { key: "requestBytes", label: "Request byte limit", help: "Total request size, including settings. May further reduce history." },
-  { key: "timeoutSeconds", label: "Generation timeout (seconds)", help: "Total time allowed for a request, including prompt processing." },
+  { key: "timeoutSeconds", label: "Generation timeout (seconds)", help: "Total time allowed for a request, including queue wait, prompt processing, and streaming." },
   { key: "safetyTokens", label: "Safety reserve (tokens)", help: "Extra context space kept free." },
 ];
 
