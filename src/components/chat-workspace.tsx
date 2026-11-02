@@ -1,10 +1,11 @@
 "use client";
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ArrowUp, ArrowUpRight, Check, ChevronDown, Code2, Compass, Copy, Feather, LoaderCircle, LogOut, Menu, MessageSquare, PanelLeftClose, Plus, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, X, RotateCcw } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { RequestDiagnostics, exportDiagnostics } from "@/components/request-diagnostics";
-import { DIAGNOSTICS_HEADER, parseDiagnosticHeader, type DiagnosticRecord } from "@/lib/diagnostics";
+import { DIAGNOSTICS_HEADER, parseDiagnosticHeader, type BrowserTimings, type DiagnosticRecord } from "@/lib/diagnostics";
+import { AnswerPaint } from "@/components/answer-paint";
 import { AdvancedSettings } from "@/components/advanced-settings";
 import { DEFAULT_SETTINGS, SETTINGS_MAX, SETTINGS_KEY, parseSettings, fitSettings, fitMessages, jsonBytes, type ChatSettings } from "@/lib/chat-settings";
 import { consumeCompletion } from "@/lib/protocol";
@@ -33,6 +34,14 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   function patchDiagnostic(id: string, patch: Partial<DiagnosticRecord>) {
     setDiagnosticRecords(records => records.map(record => record.id === id ? { ...record, ...patch } : record));
   }
+  function patchBrowserTiming(id: string, patch: Partial<BrowserTimings>) {
+    setDiagnosticRecords(records => records.map(record => record.id === id && record.browserTimings
+      ? { ...record, browserTimings: { ...record.browserTimings, ...patch } } : record));
+  }
+  const markFirstRender = useCallback((id: string, observed: number) => {
+    setDiagnosticRecords(records => records.map(record => record.id === id && record.browserStartedAt !== undefined && record.browserTimings && record.browserTimings.firstRenderMs === null
+      ? { ...record, browserTimings: { ...record.browserTimings, firstRenderMs: observed - record.browserStartedAt } } : record));
+  }, []);
   const controller = useRef<AbortController | null>(null); const textarea = useRef<HTMLTextAreaElement>(null); const searchInput = useRef<HTMLInputElement>(null); const bottom = useRef<HTMLDivElement>(null); const scroller = useRef<HTMLDivElement>(null); const follow = useRef(true); const dialog = useRef<HTMLDivElement>(null);
   const active = chats.find(c => c.id === activeId); const messages = active?.messages ?? [];
   const preview = connection.mode === "preview";
@@ -106,6 +115,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     setChats(prev => prev.map(chat => chat.id !== chatId ? chat : { ...chat, messages: chat.messages.map(m => m.id === messageId ? { ...m, ...(typeof patch === "function" ? patch(m) : patch) } : m) }));
   }
   async function send(text = draft, history = messages) {
+    const submitted = performance.now();
     text = text.trim(); if (!text || controller.current) return;
     if (chats.length >= 100 && !activeId) { setToast("You have 100 saved chats. Delete one before starting another."); return; }
     if (!connection.ready || !connection.limits) { setToast(connection.error ?? "Wait for the server limits to be verified before sending."); return; }
@@ -125,31 +135,45 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       contextBudget: effectiveSettings.contextTokens, reuseCachedPrefixes: effectiveSettings.reuseCachedPrefixes,
       settings: { ...effectiveSettings }, temperature,
       gateway: null, usage: null, finishReason: null,
+      browserStartedAt: submitted,
+      browserTimings: { firstContentMs: null, firstRenderMs: null, completionMs: null, elapsedMs: null },
     }]);
     const locallyTrimmed = input.length < completedHistory(history).length + 1;
     setChats(prev => [{ id, title: active?.title ?? text.slice(0, 48), updatedAt: Date.now(), messages: pending }, ...prev.filter(c => c.id !== id)]);
     setActiveId(id); setDraft(""); setSidebar(false); follow.current = true;
     const abort = new AbortController(); controller.current = abort; setBusy(id);
     let responseStarted = false;
+    let contentReceived = false;
     try {
       const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json", ...(captureDiagnostic ? { [DIAGNOSTICS_HEADER]: "1" } : {}) }, body: JSON.stringify({ messages: input, max_tokens: effectiveSettings.outputTokens, temperature, settings: effectiveSettings }), signal: abort.signal });
-      if (captureDiagnostic) patchDiagnostic(responseId, { gateway: parseDiagnosticHeader(response.headers.get(DIAGNOSTICS_HEADER)) });
+      const gateway = captureDiagnostic ? parseDiagnosticHeader(response.headers.get(DIAGNOSTICS_HEADER)) : null;
+      if (captureDiagnostic) patchDiagnostic(responseId, { gateway });
       if (!response.ok || !response.body) { if (response.status === 401) setAuthenticated(false); throw new Error((await response.json()).error ?? "Couldn't start a reply."); }
       responseStarted = true;
       if (captureDiagnostic) patchDiagnostic(responseId, { status: "streaming" });
       const trimmed = Number(response.headers.get("X-Context-Trimmed") ?? 0);
       if (trimmed || locallyTrimmed) updateMessage(id, responseId, { note: "Earlier messages were omitted to fit the model's context." });
-      await consumeCompletion(response.body, delta => updateMessage(id, responseId, m => ({ content: m.content + delta })), reason => {
+      await consumeCompletion(response.body, delta => {
+        if (captureDiagnostic && delta && !contentReceived) {
+          contentReceived = true; patchBrowserTiming(responseId, { firstContentMs: performance.now() - submitted });
+        }
+        updateMessage(id, responseId, m => ({ content: m.content + delta }));
+      }, reason => {
         if (captureDiagnostic) patchDiagnostic(responseId, { finishReason: reason });
         if (reason === "length") updateMessage(id, responseId, { note: "Response length reached. Ask me to continue for more." });
-      }, captureDiagnostic ? usage => patchDiagnostic(responseId, { usage }) : undefined);
+      }, captureDiagnostic ? usage => patchDiagnostic(responseId, { usage }) : undefined,
+      captureDiagnostic ? event => { if (event.requestId === gateway?.requestId) patchDiagnostic(responseId, { gatewayTimings: event.timings }); } : undefined);
+      if (captureDiagnostic) patchBrowserTiming(responseId, { completionMs: performance.now() - submitted });
       if (captureDiagnostic) patchDiagnostic(responseId, { status: "completed" });
       updateMessage(id, responseId, { state: "complete" });
     } catch (error) {
       if (captureDiagnostic) patchDiagnostic(responseId, { status: abort.signal.aborted ? "stopped" : responseStarted ? "interrupted" : "error" });
       if (abort.signal.aborted) updateMessage(id, responseId, { state: "stopped", note: "You stopped this reply." });
       else updateMessage(id, responseId, { state: "error", note: error instanceof Error ? error.message : "The connection was interrupted. Please retry." });
-    } finally { controller.current = null; setBusy(null); textarea.current?.focus(); }
+    } finally {
+      if (captureDiagnostic) patchBrowserTiming(responseId, { elapsedMs: performance.now() - submitted });
+      controller.current = null; setBusy(null); textarea.current?.focus();
+    }
   }
   function retry() { const index = messages.findLastIndex(m => m.role === "user"); if (index >= 0) void send(messages[index].content, messages.slice(0, index)); }
   async function logout() {
@@ -188,7 +212,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       <header className="workspace-header"><div className="workspace-heading"><button className="icon-button mobile-only" onClick={() => setSidebar(true)} aria-label="Open sidebar"><Menu size={20}/></button><span className="header-label">Personal workspace</span><span className="header-slash">/</span><button className="model-button" onClick={() => setSettings(true)}>Qwen <ChevronDown size={14}/></button></div><button className={`connection-pill ${connection.mode === "live" && connection.ready ? "online" : preview ? "preview" : "offline"}`} onClick={() => setSettings(true)}><span/>{preview ? "Local preview" : connection.mode === "checking" ? "Connecting" : connection.mode === "unconfigured" ? "Setup needed" : connection.ready ? "Model online" : "Model offline"}<ArrowUpRight size={13}/></button></header>
       <main className={`chat-main ${messages.length ? "has-messages" : ""}`} ref={scroller} onScroll={() => { const el = scroller.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>
         {!messages.length ? <div className="welcome"><div className="welcome-mark" aria-hidden="true"><span>✳</span><i/></div><div className="eyebrow">A FRESH CONVERSATION</div><h1>A little curiosity.<br/><em>A lot of possibility.</em></h1><p>Your space to think, write, and work things out.</p><div className="starter-grid">{starters.map(card => <button className="starter-card" key={card.label} onClick={() => { setDraft(card.text); textarea.current?.focus(); }}><div><card.icon size={20} strokeWidth={1.45}/><ArrowUpRight size={16}/></div><strong>{card.label}</strong><small>{card.caption}</small></button>)}</div></div>
-        : <div className="message-list">{messages.map((message, index) => <article className={`message ${message.role}`} key={message.id}><div className="message-avatar">{message.role === "assistant" ? logo : "Z"}</div><div className="message-body"><div className="message-author">{message.role === "user" ? "You" : preview ? "Qwen · preview" : "Qwen"}{message.role === "assistant" && <span>ASSISTANT</span>}</div>{message.content ? message.role === "user" ? <p className="user-content">{message.content}</p> : <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: ({ children }) => <CodeBlock>{children}</CodeBlock>, a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> }}>{message.content}</ReactMarkdown></div> : busy === activeId && index === messages.length - 1 ? <div className="thinking" aria-label="Qwen is thinking"><span/><span/><span/></div> : null}{diagnosticsById.has(message.id) && <RequestDiagnostics record={diagnosticsById.get(message.id)!}/>} {message.note && <div className={`message-note ${message.state === "error" ? "error" : ""}`} role={message.state === "error" ? "alert" : undefined}>{message.note}</div>}{message.role === "assistant" && busy !== activeId && <div className="message-actions">{message.content && <CopyButton text={message.content}/>} {index === messages.length - 1 && <button onClick={retry} disabled={!!busy}><RotateCcw size={14}/><span>Try again</span></button>}{message.state === "stopped" && <span>Stopped</span>}</div>}</div></article>)}<div ref={bottom}/></div>}
+        : <div className="message-list">{messages.map((message, index) => <article className={`message ${message.role}`} key={message.id}><div className="message-avatar">{message.role === "assistant" ? logo : "Z"}</div><div className="message-body"><div className="message-author">{message.role === "user" ? "You" : preview ? "Qwen · preview" : "Qwen"}{message.role === "assistant" && <span>ASSISTANT</span>}</div>{message.content ? message.role === "user" ? <p className="user-content">{message.content}</p> : <AnswerPaint messageId={message.id} onPaint={diagnosticsById.get(message.id)?.browserTimings?.firstRenderMs === null ? markFirstRender : undefined}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: ({ children }) => <CodeBlock>{children}</CodeBlock>, a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> }}>{message.content}</ReactMarkdown></AnswerPaint> : busy === activeId && index === messages.length - 1 ? <div className="thinking" aria-label="Qwen is thinking"><span/><span/><span/></div> : null}{diagnosticsById.has(message.id) && <RequestDiagnostics record={diagnosticsById.get(message.id)!}/>} {message.note && <div className={`message-note ${message.state === "error" ? "error" : ""}`} role={message.state === "error" ? "alert" : undefined}>{message.note}</div>}{message.role === "assistant" && busy !== activeId && <div className="message-actions">{message.content && <CopyButton text={message.content}/>} {index === messages.length - 1 && <button onClick={retry} disabled={!!busy}><RotateCcw size={14}/><span>Try again</span></button>}{message.state === "stopped" && <span>Stopped</span>}</div>}</div></article>)}<div ref={bottom}/></div>}
       </main>
       <div className="composer-region"><div className="composer-wrap">{preview && <div className="preview-note"><Sparkles size={13}/> Local preview · sample replies, no model requests</div>}{connection.mode === "live" && !connection.ready && <div className="offline-note">Your model may be stopped or loading. You can try again when it’s ready.</div>}<form className="composer" onSubmit={e => { e.preventDefault(); void send(); }}><label className="sr-only" htmlFor="message">Message Qwen</label><textarea ref={textarea} id="message" placeholder="What’s on your mind?" value={draft} onChange={e => setDraft(e.target.value)} maxLength={effectiveSettings.inputCharacters} rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}/><div className="composer-bottom"><span className="composer-model">{logo} Qwen <span>27B</span></span><div className="composer-controls"><span className="enter-hint">Shift + Enter for a new line</span>{busy ? <button type="button" className="send-button stop-button" aria-label="Stop generation" onClick={() => controller.current?.abort()}><Square size={15} fill="currentColor"/></button> : <button className="send-button" aria-label="Send message" disabled={!draft.trim()}><ArrowUp size={20}/></button>}</div></div></form><p className="composer-footer">A helpful second perspective. Always give important details a second look.</p></div></div>
     </div>

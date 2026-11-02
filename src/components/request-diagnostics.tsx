@@ -14,7 +14,16 @@ export function RequestDiagnostics({ record }: { record: DiagnosticRecord }) {
   const [copied, setCopied] = useState("");
   const values = diagnosticValues(record);
   const n = (value: number | null) => value === null ? "Unavailable" : value.toLocaleString();
+  const ms = (value: number | null) => value === null ? "Unavailable" : `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })} ms`;
   const rows: [string, string][] = [
+    ["Send → first content received", ms(values.browser_first_content_ms)],
+    ["Send → first answer rendered (paint estimate)", ms(values.browser_first_render_ms)],
+    ["Send → response completed", ms(values.browser_completion_ms)],
+    ["Send → request ended (including stop/error)", ms(values.browser_elapsed_ms)],
+    ["Gateway context fitting", ms(values.gateway_context_fit_ms)],
+    ["Upstream request → first content at gateway", ms(values.gateway_upstream_first_content_ms)],
+    ["Gateway entry → first content", ms(values.gateway_first_content_ms)],
+    ["Gateway entry → stream end", ms(values.gateway_total_ms)],
     ["Input tokens before gateway trimming", n(values.input_tokens_before)],
     ["Input tokens sent to model", n(values.input_tokens_sent)],
     ["Tokens removed by gateway", n(values.removed_tokens)],
@@ -35,6 +44,7 @@ export function RequestDiagnostics({ record }: { record: DiagnosticRecord }) {
   return <details className="request-diagnostics">
     <summary>Request diagnostics · {record.status}</summary>
     <p className="diagnostic-caption">Before/after counts include the system instructions and chat template. “Before” starts after browser trimming.</p>
+    <p className="diagnostic-caption">Browser timings start at Send; gateway timings use its own clock. First render is estimated after committed answer content and a visible paint opportunity, not an exact display timestamp. Gateway timings arrive at stream end and may be unavailable after cancellation. Use Grafana for engine TTFT and ITL; these durations have different boundaries.</p>
     <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
     {values.input_tokens_sent !== null && <p className="diagnostic-budget">{n(values.input_tokens_sent)} input + {n(values.output_budget)} output budget + {n(values.safety_reserve)} reserve = {n(values.input_tokens_sent + values.output_budget + values.safety_reserve)} / {n(values.context_budget)}</p>}
     {record.gateway?.inputTokensAfter === null && record.gateway.lastCountedInputTokens !== null && <p className="diagnostic-caption">Last tokenizer count: {n(record.gateway.lastCountedInputTokens)}. This input was not confirmed for generation.</p>}

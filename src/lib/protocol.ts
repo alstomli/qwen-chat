@@ -1,5 +1,5 @@
 import { validateSettings, jsonBytes, type ChatSettings } from "./chat-settings";
-import { parseUsage, type TokenUsage } from "./diagnostics";
+import { parseUsage, parseTimingEvent, type GatewayTimingEvent, type TokenUsage } from "./diagnostics";
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 export type ChatInput = { messages: ChatMessage[]; max_tokens: number; temperature: number; settings: ChatSettings };
 
@@ -38,14 +38,20 @@ export async function consumeCompletion(
   stream: ReadableStream<Uint8Array>, onDelta: (text: string) => void,
   onFinish?: (reason: string) => void,
   onUsage?: (usage: TokenUsage) => void,
+  onTiming?: (event: GatewayTimingEvent) => void,
 ) {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let completed = false;
   function event(block: string) {
+    const eventName = block.split(/\r?\n/).find(line => line.startsWith("event:"))?.slice(6).trim();
     const data = block.split(/\r?\n/).filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
     if (!data) return;
+    if (eventName === "chat-timing") {
+      try { const timing = parseTimingEvent(JSON.parse(data)); if (timing) onTiming?.(timing); } catch { /* Optional metadata cannot break the answer. */ }
+      return;
+    }
     if (data === "[DONE]") { completed = true; return; }
     const item = JSON.parse(data);
     if (item.error) throw new Error(typeof item.error === "string" ? item.error : item.error.message ?? "The response was interrupted.");

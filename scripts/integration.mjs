@@ -65,7 +65,13 @@ try {
   assert.equal(response.status, 200);
   const diagnostic = JSON.parse(response.headers.get('X-Chat-Diagnostics'));
   assert.equal(diagnostic.inputTokensBefore, 50000); assert.equal(diagnostic.inputTokensAfter, 100); assert.equal(diagnostic.gatewayTrimmedMessages, 2);
-  assert.match(await response.text(), /"completion_tokens":4/);
+  const timedStream = await response.text();
+  assert.match(timedStream, /"completion_tokens":4/);
+  const timing = JSON.parse(/event: chat-timing\ndata: ([^\n]+)/.exec(timedStream)[1]);
+  assert.equal(timing.requestId, diagnostic.requestId);
+  assert.ok(timing.timings.contextFitMs >= 0);
+  assert.ok(timing.timings.gatewayTotalMs >= timing.timings.gatewayFirstContentMs);
+  assert.ok(timedStream.indexOf('event: chat-timing') < timedStream.indexOf('data: [DONE]'));
   response = await diagnosticChat([{ role: 'user', content: 'oversized' }]);
   assert.equal(response.status, 400); assert.equal(JSON.parse(response.headers.get('X-Chat-Diagnostics')).inputTokensAfter, null);
   response = await diagnosticChat([{ role: 'user', content: 'length-test' }]);
@@ -79,6 +85,10 @@ try {
   assert.equal(response.status, 200); await response.text();
   assert.equal((await fetch(base + '/api/logout', { method: 'POST', headers })).status, 200);
   console.log('PASS: Cancellation releases gateway capacity; logout clears the session cookie');
+  if (process.env.CHAT_TEST_PLAYWRIGHT) {
+    const { checkBrowserTimings } = await import('./check-browser-timings.mjs');
+    await checkBrowserTimings(base, 'integration-password-' + 'x'.repeat(24));
+  }
 } finally {
   clearInterval(keepAlive);
   if (server && server.exitCode == null) {
