@@ -76,11 +76,11 @@ test("API forwards diagnostics only with both opt-ins, including errors, and rep
   try {
     Object.assign(process.env, { CHAT_PASSWORD: "test-only", SESSION_SECRET: "x".repeat(48), RUNPOD_CHAT_URL: "https://gateway.example", RUNPOD_CHAT_TOKEN: "x".repeat(48), CHAT_DIAGNOSTICS_ENABLED: "true", NODE_ENV: "production", VERCEL_ENV: "production" });
     const calls: { url: string; init?: RequestInit }[] = [];
-    let supported = true; let failure = false;
+    let supported = true; let failure = false; let rejection = ""; let failureStatus = 400;
     globalThis.fetch = async (input, init) => {
       const url = String(input); calls.push({ url, init });
       if (url.endsWith("/health")) return Response.json({ settingsVersion: 1, limits: SETTINGS_MAX, diagnosticsVersion: supported ? 1 : 0 });
-      return new Response(failure ? '{"error":"too large"}' : sse, { status: failure ? 400 : 200, headers: { [DIAGNOSTICS_HEADER]: JSON.stringify({ ...summary, credentials: "never forward" }), "Content-Type": "text/event-stream" } });
+      return new Response(failure ? '{"error":"private upstream detail"}' : sse, { status: failure ? failureStatus : 200, headers: { [DIAGNOSTICS_HEADER]: JSON.stringify({ ...summary, credentials: "never forward" }), "Content-Type": "text/event-stream", "X-Chat-Rejection": rejection } });
     };
     const headers = { Origin: "https://chat.example", Cookie: cookieHeader(issueSession()).split(";")[0], "Content-Type": "application/json" };
     const request = (diagnostic: boolean) => new Request("https://chat.example/api/chat", { method: "POST", headers: { ...headers, ...(diagnostic ? { [DIAGNOSTICS_HEADER]: "1" } : {}) }, body: JSON.stringify({ messages: [{ role: "user", content: "Hi" }], settings: DEFAULT_SETTINGS }) });
@@ -100,6 +100,20 @@ test("API forwards diagnostics only with both opt-ins, including errors, and rep
     failure = true;
     response = await POST(request(true));
     assert.equal(response.status, 400); assert.ok(response.headers.get(DIAGNOSTICS_HEADER));
+    for (const [status, reason, expected] of [
+      [429, "queue_full", "waiting queue is full"],
+      [429, "rate_limit", "rate limit has been reached"],
+      [504, "queue_timeout", "timed out while waiting"],
+      [429, "unrecognized", "answering another request"],
+    ] as const) {
+      failureStatus = status; rejection = reason;
+      response = await POST(request(true));
+      assert.equal(response.status, status);
+      const body = await response.json();
+      assert.match(body.error, new RegExp(expected));
+      assert.doesNotMatch(body.error, /private upstream/);
+      assert.ok(response.headers.get(DIAGNOSTICS_HEADER));
+    }
     supported = false;
     assert.equal((await POST(request(true))).status, 503);
     assert.equal((await (await GET(new Request("https://chat.example/api/status", { headers }))).json()).diagnosticsVersion, 0);

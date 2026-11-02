@@ -51,9 +51,10 @@ export async function POST(request: Request) {
     }
     catch (error) { return jsonError(error instanceof Error ? error.message : "Gateway settings unavailable.", 400); }
     const controller = new AbortController();
+    let timedOut = false;
     const cancel = () => controller.abort();
     request.signal.addEventListener("abort", cancel, { once: true });
-    const timer = setTimeout(cancel, input.settings.timeoutSeconds * 1000);
+    const timer = setTimeout(() => { timedOut = true; cancel(); }, input.settings.timeoutSeconds * 1000);
     let upstream: Response;
     try {
       upstream = await fetch(config.base + "/v1/chat/completions", {
@@ -61,7 +62,9 @@ export async function POST(request: Request) {
         body: JSON.stringify({ ...input, settings, stream: true }), signal: controller.signal, cache: "no-store"
       });
     } catch (error) {
-      clearTimeout(timer); request.signal.removeEventListener("abort", cancel); throw error;
+      clearTimeout(timer); request.signal.removeEventListener("abort", cancel);
+      if (timedOut) return jsonError("Your request timed out while waiting for the model to start a reply. Please try again.", 504);
+      throw error;
     }
     const diagnostic = diagnosticRequested ? parseDiagnosticHeader(upstream.headers.get(DIAGNOSTICS_HEADER)) : null;
     const diagnosticHeaders: Record<string, string> = diagnostic ? { [DIAGNOSTICS_HEADER]: JSON.stringify(diagnostic) } : {};
@@ -69,9 +72,13 @@ export async function POST(request: Request) {
       clearTimeout(timer); request.signal.removeEventListener("abort", cancel);
       let message = "Your model is unavailable or still loading. Try again shortly.";
       if (upstream.status === 429) message = "Your model is answering another request. Try again in a moment.";
+      const rejection = upstream.headers.get("X-Chat-Rejection");
+      if (upstream.status === 429 && rejection === "queue_full") message = "The model's waiting queue is full. Please try again shortly.";
+      if (upstream.status === 429 && rejection === "rate_limit") message = "The chat request rate limit has been reached. Please wait a minute and try again.";
+      if (upstream.status === 504 && rejection === "queue_timeout") message = "Your request timed out while waiting for the model. Please try again.";
       if (upstream.status === 413 || upstream.status === 400) message = "This message is too long for the model. Shorten it or start a new chat.";
       await upstream.body?.cancel();
-      const response = jsonError(message, [400, 413, 429].includes(upstream.status) ? upstream.status : 503);
+      const response = jsonError(message, [400, 413, 429].includes(upstream.status) || (upstream.status === 504 && rejection === "queue_timeout") ? upstream.status : 503);
       for (const [key, value] of Object.entries(diagnosticHeaders)) response.headers.set(key, value);
       return response;
     }

@@ -83,6 +83,47 @@ try {
   await sleep(700);
   response = await chat([{ role: 'user', content: 'After cancellation' }]);
   assert.equal(response.status, 200); await response.text();
+  const pending = []; const running = [];
+  async function admissionIs(active, waiting) {
+    for (let attempt = 0; attempt < 80; attempt++) {
+      const health = await (await fetch('http://127.0.0.1:18001/health', { headers: { Authorization: 'Bearer ' + token } })).json();
+      if (health.admission.activeRequests === active && health.admission.waitingRequests === waiting) return;
+      await sleep(25);
+    }
+    throw new Error(`Admission did not reach ${active} active / ${waiting} waiting`);
+  }
+  try {
+    for (let index = 0; index < 2; index++) {
+      const abort = new AbortController();
+      const response = await fetch(base + '/api/chat', { method: 'POST', headers, signal: abort.signal, body: JSON.stringify({ messages: [{ role: 'user', content: 'slow' }] }) });
+      assert.equal(response.status, 200);
+      const reader = response.body.getReader(); await reader.read();
+      running.push({ abort, reader });
+    }
+    await admissionIs(2, 0);
+    for (let index = 0; index < 6; index++) {
+      const abort = new AbortController();
+      const result = fetch(base + '/api/chat', { method: 'POST', headers, signal: abort.signal, body: JSON.stringify({ messages: [{ role: 'user', content: 'Waiting request ' + index }] }) }).then(async response => ({ status: response.status, body: await response.text() })).catch(error => ({ error: error.name }));
+      pending.push({ abort, result });
+    }
+    await admissionIs(2, 6);
+    response = await chat([{ role: 'user', content: 'Queue overflow' }]);
+    assert.equal(response.status, 429); assert.match((await response.json()).error, /waiting queue is full/);
+    pending[0].abort.abort(); await pending[0].result;
+    await admissionIs(2, 5);
+    response = await fetch(base + '/api/chat', { method: 'POST', headers, body: JSON.stringify({ messages: [{ role: 'user', content: 'Queue timeout' }], max_tokens: 128, settings: { timeoutSeconds: 1, outputTokens: 128 } }) });
+    // The proxy and gateway share one budget; either may expire first.
+    assert.equal(response.status, 504); assert.match((await response.json()).error, /timed out while waiting/);
+    await admissionIs(2, 5);
+    console.log('PASS: Two simultaneous HTTP streams, six queued requests, queue-full message, queued disconnect, and bounded wait');
+  } finally {
+    for (const item of pending) item.abort.abort();
+    for (const item of running) { item.abort.abort(); await item.reader.cancel().catch(() => {}); }
+    await Promise.all(pending.map(item => item.result));
+  }
+  await admissionIs(0, 0);
+  response = await chat([{ role: 'user', content: 'After queue cleanup' }]);
+  assert.equal(response.status, 200); await response.text();
   assert.equal((await fetch(base + '/api/logout', { method: 'POST', headers })).status, 200);
   console.log('PASS: Cancellation releases gateway capacity; logout clears the session cookie');
   if (process.env.CHAT_TEST_PLAYWRIGHT) {
