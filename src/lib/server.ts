@@ -33,11 +33,18 @@ export function connectionConfig() {
   }
   return { mode: process.env.NODE_ENV !== "production" && process.env.CHAT_PREVIEW_MODE === "true" ? "preview" as const : "unconfigured" as const, base: "", token: "" };
 }
-export async function gatewayLimits(config: ReturnType<typeof connectionConfig>) {
+export function diagnosticsAllowed(env: Record<string, string | undefined> = process.env) {
+  return env.CHAT_DIAGNOSTICS_ENABLED === "true" && env.VERCEL_ENV !== "production" &&
+    (env.NODE_ENV === "development" || env.VERCEL_ENV === "preview");
+}
+export async function gatewayCapabilities(config: ReturnType<typeof connectionConfig>) {
   const response = await fetch(config.base + "/health", { headers: { Authorization: "Bearer " + config.token }, cache: "no-store", signal: AbortSignal.timeout(5000) });
   if (!response.ok) throw new Error("The model is unavailable or still loading.");
   const body = await response.json();
   if (body.settingsVersion !== 1) throw new Error("Update the chat gateway to use configurable settings.");
-  return parseServerLimits(body.limits);
+  return { limits: parseServerLimits(body.limits), diagnosticsVersion: body.diagnosticsVersion === 1 ? 1 : 0 };
+}
+export async function gatewayLimits(config: ReturnType<typeof connectionConfig>) {
+  return (await gatewayCapabilities(config)).limits;
 }
 export const jsonError = (error: string, status: number) => Response.json({ error }, { status, headers: { "Cache-Control": "no-store" } });

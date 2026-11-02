@@ -1,4 +1,5 @@
 import { validateSettings, jsonBytes, type ChatSettings } from "./chat-settings";
+import { parseUsage, type TokenUsage } from "./diagnostics";
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 export type ChatInput = { messages: ChatMessage[]; max_tokens: number; temperature: number; settings: ChatSettings };
 
@@ -36,6 +37,7 @@ export function validateInput(value: unknown): ChatInput {
 export async function consumeCompletion(
   stream: ReadableStream<Uint8Array>, onDelta: (text: string) => void,
   onFinish?: (reason: string) => void,
+  onUsage?: (usage: TokenUsage) => void,
 ) {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -47,9 +49,11 @@ export async function consumeCompletion(
     if (data === "[DONE]") { completed = true; return; }
     const item = JSON.parse(data);
     if (item.error) throw new Error(typeof item.error === "string" ? item.error : item.error.message ?? "The response was interrupted.");
+    const usage = parseUsage(item.usage);
+    if (usage) onUsage?.(usage);
     const choice = item.choices?.[0];
     if (typeof choice?.delta?.content === "string") onDelta(choice.delta.content);
-    if (choice?.finish_reason) onFinish?.(choice.finish_reason);
+    if (typeof choice?.finish_reason === "string") onFinish?.(choice.finish_reason);
   }
   try {
     while (!completed) {

@@ -2,8 +2,9 @@
 import { useState } from "react";
 import { DEFAULT_SETTINGS, SETTING_FIELDS, SETTINGS_MIN, fitSettings, validateSettings, type ChatSettings } from "@/lib/chat-settings";
 
-export function AdvancedSettings({ value, limits, available, preview, busy, onApply }: {
+export function AdvancedSettings({ value, limits, available, preview, busy, onApply, diagnosticsAvailable, diagnosticsEnabled, onDiagnosticsChange }: {
   value: ChatSettings; limits: ChatSettings; available: boolean; preview: boolean; busy: boolean; onApply: (settings: ChatSettings) => void;
+  diagnosticsAvailable: boolean; diagnosticsEnabled: boolean; onDiagnosticsChange: (enabled: boolean) => void;
 }) {
   const [draft, setDraft] = useState(() => Object.fromEntries(SETTING_FIELDS.map(({ key }) => [key, String(value[key])])));
   const [error, setError] = useState("");
@@ -22,6 +23,10 @@ export function AdvancedSettings({ value, limits, available, preview, busy, onAp
   }
   return <section className="advanced-settings" aria-labelledby="advanced-settings-heading">
     <h3 id="advanced-settings-heading">Advanced settings</h3>
+    {diagnosticsAvailable && <div>
+      <label className="prefix-cache-setting" htmlFor="request-diagnostics"><input id="request-diagnostics" type="checkbox" role="switch" checked={diagnosticsEnabled} disabled={busy} onChange={event => onDiagnosticsChange(event.target.checked)}/><span>Request diagnostics</span></label>
+      <p className="settings-help">Collect token counts for new requests in this session. Records contain no prompts or answers and are saved to a file only when you export.</p>
+    </div>}
     <p className="settings-help">Saved in this browser. Changes apply to your next request.</p>
     <p className="settings-help">{preview ? "Preview limits are shown below. A live connection will supply the running model’s context ceiling." : available ? <>Server context ceiling: <strong>{limits.contextTokens.toLocaleString()} tokens</strong>. Raising the server ceiling requires a vLLM restart.</> : "Connect to an updated gateway to verify server limits and apply settings."}</p>
     <fieldset disabled={busy || !available}>
