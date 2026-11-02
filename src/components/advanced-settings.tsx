@@ -25,7 +25,7 @@ export function AdvancedSettings({ value, limits, available, preview, busy, onAp
     <h3 id="advanced-settings-heading">Advanced settings</h3>
     {diagnosticsAvailable && <div>
       <label className="prefix-cache-setting" htmlFor="request-diagnostics"><input id="request-diagnostics" type="checkbox" role="switch" checked={diagnosticsEnabled} disabled={busy} onChange={event => onDiagnosticsChange(event.target.checked)}/><span>Request diagnostics</span></label>
-      <p className="settings-help">Collect token counts for new requests in this session. Records contain no prompts or answers and are saved to a file only when you export.</p>
+      <p className="settings-help">Collect token counts and response timings for new requests in this session. Records contain no prompts or answers and are saved to a file only when you export.</p>
     </div>}
     <p className="settings-help">Saved in this browser. Changes apply to your next request.</p>
     <p className="settings-help">{preview ? "Preview limits are shown below. A live connection will supply the running model’s context ceiling." : available ? <>Server context ceiling: <strong>{limits.contextTokens.toLocaleString()} tokens</strong>. Raising the server ceiling requires a vLLM restart.</> : "Connect to an updated gateway to verify server limits and apply settings."}</p>

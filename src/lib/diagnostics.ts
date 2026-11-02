@@ -1,5 +1,14 @@
 import type { ChatSettings } from "./chat-settings";
 export const DIAGNOSTICS_HEADER = "X-Chat-Diagnostics";
+export type GatewayTimings = {
+  contextFitMs: number | null; upstreamFirstContentMs: number | null;
+  gatewayFirstContentMs: number | null; gatewayTotalMs: number | null;
+};
+export type GatewayTimingEvent = { version: 1; requestId: string; timings: GatewayTimings };
+export type BrowserTimings = {
+  firstContentMs: number | null; firstRenderMs: number | null;
+  completionMs: number | null; elapsedMs: number | null;
+};
 export type TokenUsage = { promptTokens: number; outputTokens: number };
 export type GatewayDiagnostic = {
   version: 1; requestId: string; model: string;
@@ -17,6 +26,7 @@ export type DiagnosticRecord = {
   reuseCachedPrefixes: boolean;
   settings: ChatSettings; temperature: number;
   gateway: GatewayDiagnostic | null; usage: TokenUsage | null; finishReason: string | null;
+  browserStartedAt?: number; browserTimings?: BrowserTimings; gatewayTimings?: GatewayTimings;
 };
 const count = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
@@ -25,6 +35,20 @@ export function parseUsage(value: unknown): TokenUsage | null {
   const usage = value as Record<string, unknown>;
   return count(usage.prompt_tokens) && count(usage.completion_tokens)
     ? { promptTokens: usage.prompt_tokens, outputTokens: usage.completion_tokens } : null;
+}
+
+export function parseTimingEvent(value: unknown): GatewayTimingEvent | null {
+  if (!value || typeof value !== "object") return null;
+  const event = value as Record<string, unknown>;
+  if (event.version !== 1 || typeof event.requestId !== "string" || !/^[a-f0-9]{32}$/.test(event.requestId) || !event.timings || typeof event.timings !== "object") return null;
+  const source = event.timings as Record<string, unknown>;
+  const timings = {} as GatewayTimings;
+  for (const key of ["contextFitMs", "upstreamFirstContentMs", "gatewayFirstContentMs", "gatewayTotalMs"] as const) {
+    const value = source[key];
+    if (value !== null && (typeof value !== "number" || !Number.isFinite(value) || value < 0)) return null;
+    timings[key] = value as number | null;
+  }
+  return { version: 1, requestId: event.requestId, timings };
 }
 
 /** Allowlist metadata so prompts, credentials and arbitrary upstream fields cannot enter exports. */
@@ -70,6 +94,14 @@ export function diagnosticValues(record: DiagnosticRecord) {
     temperature: record.temperature, input_character_limit: record.settings.inputCharacters,
     history_message_limit: record.settings.historyMessages, history_byte_limit: record.settings.historyBytes,
     request_byte_limit: record.settings.requestBytes, timeout_seconds: record.settings.timeoutSeconds,
+    browser_first_content_ms: record.browserTimings?.firstContentMs ?? null,
+    browser_first_render_ms: record.browserTimings?.firstRenderMs ?? null,
+    browser_completion_ms: record.browserTimings?.completionMs ?? null,
+    browser_elapsed_ms: record.browserTimings?.elapsedMs ?? null,
+    gateway_context_fit_ms: record.gatewayTimings?.contextFitMs ?? null,
+    gateway_upstream_first_content_ms: record.gatewayTimings?.upstreamFirstContentMs ?? null,
+    gateway_first_content_ms: record.gatewayTimings?.gatewayFirstContentMs ?? null,
+    gateway_total_ms: record.gatewayTimings?.gatewayTotalMs ?? null,
   };
 }
 

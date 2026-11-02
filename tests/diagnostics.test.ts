@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { diagnosticsAllowed } from "../src/lib/server";
-import { DIAGNOSTICS_HEADER, parseDiagnosticHeader, diagnosticValues, diagnosticsCsv, type DiagnosticRecord } from "../src/lib/diagnostics";
+import { DIAGNOSTICS_HEADER, parseDiagnosticHeader, parseTimingEvent, diagnosticValues, diagnosticsCsv, type DiagnosticRecord } from "../src/lib/diagnostics";
 import { consumeCompletion } from "../src/lib/protocol";
 import { DEFAULT_SETTINGS, SETTINGS_MAX } from "../src/lib/chat-settings";
 import { cookieHeader, issueSession } from "../src/lib/auth";
@@ -53,6 +53,22 @@ test("stream parser captures final usage independently of text, chunk boundaries
   let unavailable = null;
   await assert.rejects(consumeCompletion(interrupted, () => {}, undefined, value => { unavailable = value; }));
   assert.equal(unavailable, null);
+});
+
+test("timing events survive fragmented UTF-8, are allowlisted, and never become answer content", async () => {
+  const event = { version: 1, requestId: summary.requestId, timings: { contextFitMs: 12.5, upstreamFirstContentMs: 200, gatewayFirstContentMs: 220, gatewayTotalMs: 400 } };
+  assert.deepEqual(parseTimingEvent({ ...event, secret: "not exported", timings: { ...event.timings, prompt: "private" } }), event);
+  for (const invalid of [-1, Infinity, "20", undefined]) assert.equal(parseTimingEvent({ ...event, timings: { ...event.timings, contextFitMs: invalid } }), null);
+  const streamText = sse.replace('data: [DONE]', `event: chat-timing\r\ndata: ${JSON.stringify(event)}\r\n\r\nevent: chat-timing\ndata: {broken}\n\nevent: chat-timing\ndata: ${JSON.stringify({ ...event, version: 2 })}\n\ndata: [DONE]`);
+  const bytes = new TextEncoder().encode(streamText);
+  let text = ""; const timings: unknown[] = [];
+  await consumeCompletion(new ReadableStream({ start(c) { for (const byte of bytes) c.enqueue(Uint8Array.of(byte)); c.close(); } }), delta => text += delta, undefined, undefined, value => timings.push(value));
+  assert.equal(text, "你好"); assert.deepEqual(timings, [event]);
+  const values = diagnosticValues({ ...record, gatewayTimings: event.timings, browserTimings: { firstContentMs: 250, firstRenderMs: 280, completionMs: null, elapsedMs: 300 }, status: "stopped" });
+  assert.equal(values.browser_completion_ms, null); assert.equal(values.browser_elapsed_ms, 300);
+  assert.equal(values.gateway_context_fit_ms, 12.5);
+  assert.equal(diagnosticValues(record).browser_first_content_ms, null);
+  assert.match(diagnosticsCsv([{ ...record, gatewayTimings: event.timings }]), /gateway_context_fit_ms/);
 });
 
 test("API forwards diagnostics only with both opt-ins, including errors, and reports capability", async () => {
