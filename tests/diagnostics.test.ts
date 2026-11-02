@@ -12,12 +12,15 @@ const summary = { version: 1, requestId: "a".repeat(32), model: "qwen", inputTok
 const record: DiagnosticRecord = { id: "local-id", createdAt: "2026-11-01T12:00:00Z", status: "completed", browserOriginalMessages: 7, browserSentMessages: 5, browserOriginalBytes: 2000, browserSentBytes: 1000, outputBudget: 7680, safetyReserve: 32, contextBudget: 40960, reuseCachedPrefixes: true, settings: { ...DEFAULT_SETTINGS }, temperature: 0.7, gateway: parseDiagnosticHeader(JSON.stringify(summary)), usage: { promptTokens: 150, outputTokens: 23 }, finishReason: "stop" };
 const sse = 'data: {"choices":[{"delta":{"content":"你好"},"finish_reason":null}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\ndata: {"choices":[],"usage":{"prompt_tokens":150,"completion_tokens":128,"secret":"not exported"}}\n\ndata: [DONE]\n\n';
 
-test("diagnostics require explicit opt-in and are blocked on normal production", () => {
+test("diagnostics require explicit server opt-in in every environment", () => {
   assert.equal(diagnosticsAllowed({ NODE_ENV: "development" }), false);
+  assert.equal(diagnosticsAllowed({ NODE_ENV: "production", VERCEL_ENV: "production" }), false);
+  assert.equal(diagnosticsAllowed({ CHAT_DIAGNOSTICS_ENABLED: "false" }), false);
+  assert.equal(diagnosticsAllowed({ CHAT_DIAGNOSTICS_ENABLED: "TRUE" }), false);
   assert.equal(diagnosticsAllowed({ NODE_ENV: "development", CHAT_DIAGNOSTICS_ENABLED: "true" }), true);
-  assert.equal(diagnosticsAllowed({ NODE_ENV: "production", CHAT_DIAGNOSTICS_ENABLED: "true" }), false);
+  assert.equal(diagnosticsAllowed({ NODE_ENV: "production", CHAT_DIAGNOSTICS_ENABLED: "true" }), true);
   assert.equal(diagnosticsAllowed({ NODE_ENV: "production", VERCEL_ENV: "preview", CHAT_DIAGNOSTICS_ENABLED: "true" }), true);
-  assert.equal(diagnosticsAllowed({ NODE_ENV: "development", VERCEL_ENV: "production", CHAT_DIAGNOSTICS_ENABLED: "true" }), false);
+  assert.equal(diagnosticsAllowed({ NODE_ENV: "production", VERCEL_ENV: "production", CHAT_DIAGNOSTICS_ENABLED: "true" }), true);
 });
 
 test("summary parsing and exports allowlist metadata and preserve unavailable values", () => {
@@ -55,8 +58,7 @@ test("stream parser captures final usage independently of text, chunk boundaries
 test("API forwards diagnostics only with both opt-ins, including errors, and reports capability", async () => {
   const savedEnv = { ...process.env }; const savedFetch = globalThis.fetch;
   try {
-    Object.assign(process.env, { CHAT_PASSWORD: "test-only", SESSION_SECRET: "x".repeat(48), RUNPOD_CHAT_URL: "https://gateway.example", RUNPOD_CHAT_TOKEN: "x".repeat(48), CHAT_DIAGNOSTICS_ENABLED: "true", NODE_ENV: "development" });
-    delete process.env.VERCEL_ENV;
+    Object.assign(process.env, { CHAT_PASSWORD: "test-only", SESSION_SECRET: "x".repeat(48), RUNPOD_CHAT_URL: "https://gateway.example", RUNPOD_CHAT_TOKEN: "x".repeat(48), CHAT_DIAGNOSTICS_ENABLED: "true", NODE_ENV: "production", VERCEL_ENV: "production" });
     const calls: { url: string; init?: RequestInit }[] = [];
     let supported = true; let failure = false;
     globalThis.fetch = async (input, init) => {
@@ -67,7 +69,9 @@ test("API forwards diagnostics only with both opt-ins, including errors, and rep
     const headers = { Origin: "https://chat.example", Cookie: cookieHeader(issueSession()).split(";")[0], "Content-Type": "application/json" };
     const request = (diagnostic: boolean) => new Request("https://chat.example/api/chat", { method: "POST", headers: { ...headers, ...(diagnostic ? { [DIAGNOSTICS_HEADER]: "1" } : {}) }, body: JSON.stringify({ messages: [{ role: "user", content: "Hi" }], settings: DEFAULT_SETTINGS }) });
     const status = await GET(new Request("https://chat.example/api/status", { headers }));
-    assert.equal((await status.json()).diagnosticsAvailable, true);
+    const statusBody = await status.json();
+    assert.equal(statusBody.diagnosticsAvailable, true);
+    assert.equal(statusBody.diagnosticsVersion, 1);
     let response = await POST(request(true));
     assert.equal(response.status, 200);
     assert.deepEqual(JSON.parse(response.headers.get(DIAGNOSTICS_HEADER)!), summary);
@@ -82,10 +86,15 @@ test("API forwards diagnostics only with both opt-ins, including errors, and rep
     assert.equal(response.status, 400); assert.ok(response.headers.get(DIAGNOSTICS_HEADER));
     supported = false;
     assert.equal((await POST(request(true))).status, 503);
-    Reflect.set(process.env, "NODE_ENV", "production");
+    assert.equal((await (await GET(new Request("https://chat.example/api/status", { headers }))).json()).diagnosticsVersion, 0);
+    supported = true;
+    process.env.CHAT_DIAGNOSTICS_ENABLED = "false";
     const before = calls.length;
     assert.equal((await POST(request(true))).status, 403);
     assert.equal(calls.length, before);
+    const disabled = await (await GET(new Request("https://chat.example/api/status", { headers }))).json();
+    assert.equal(disabled.diagnosticsAvailable, false);
+    assert.equal(disabled.diagnosticsVersion, 0);
   } finally {
     globalThis.fetch = savedFetch;
     for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];

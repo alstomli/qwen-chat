@@ -34,8 +34,7 @@ export function connectionConfig() {
   return { mode: process.env.NODE_ENV !== "production" && process.env.CHAT_PREVIEW_MODE === "true" ? "preview" as const : "unconfigured" as const, base: "", token: "" };
 }
 export function diagnosticsAllowed(env: Record<string, string | undefined> = process.env) {
-  return env.CHAT_DIAGNOSTICS_ENABLED === "true" && env.VERCEL_ENV !== "production" &&
-    (env.NODE_ENV === "development" || env.VERCEL_ENV === "preview");
+  return env.CHAT_DIAGNOSTICS_ENABLED === "true";
 }
 export async function gatewayCapabilities(config: ReturnType<typeof connectionConfig>) {
   const response = await fetch(config.base + "/health", { headers: { Authorization: "Bearer " + config.token }, cache: "no-store", signal: AbortSignal.timeout(5000) });
