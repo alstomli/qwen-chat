@@ -21,7 +21,15 @@ Configure the local frontend's ignored `.env.local` and restart its process:
 | `4bit` (default) | `RUNPOD_CHAT_URL` | `RUNPOD_CHAT_TOKEN` |
 | `bf16` | `RUNPOD_BF16_CHAT_URL` | `RUNPOD_BF16_CHAT_TOKEN` |
 
-The BF16 gateway origin is `https://ftntkktzid9f4p-8001.proxy.runpod.net`.
+The BF16 gateway origin is `https://o6f2qoctk798tq-8001.proxy.runpod.net`.
+It serves the original BF16 checkpoint on an RTX PRO 6000 with CPU offloading
+disabled. The public model ID, display name and bearer token are unchanged by
+the hardware migration. Production and local servers must load the updated
+`RUNPOD_BF16_CHAT_URL`; Preview bindings are managed separately. Redeploy/restart
+the affected frontend after changing its environment. See the backend's
+[migration record](https://github.com/alstomli/llm-inference-server/blob/main/deployments/qwen-bf16/RTX6000-MIGRATION.md)
+for verification, monitoring and rollback. The prior BF16 origin on
+`ftntkktzid9f4p` is retained only for migration rollback.
 The existing 4bit gateway remains
 `https://rp93m3noz3l9lt-8001.proxy.runpod.net`. Use the matching private chat
 credential for each Pod; monitoring credentials are separate. Never use
