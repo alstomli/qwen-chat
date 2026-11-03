@@ -79,7 +79,7 @@ test("API forwards diagnostics only with both opt-ins, including errors, and rep
     let supported = true; let failure = false; let rejection = ""; let failureStatus = 400;
     globalThis.fetch = async (input, init) => {
       const url = String(input); calls.push({ url, init });
-      if (url.endsWith("/health")) return Response.json({ settingsVersion: 1, limits: SETTINGS_MAX, diagnosticsVersion: supported ? 1 : 0 });
+      if (url.endsWith("/health")) return Response.json({ ready: true, model: "qwen", settingsVersion: 1, limits: SETTINGS_MAX, diagnosticsVersion: supported ? 1 : 0 });
       return new Response(failure ? '{"error":"private upstream detail"}' : sse, { status: failure ? failureStatus : 200, headers: { [DIAGNOSTICS_HEADER]: JSON.stringify({ ...summary, credentials: "never forward" }), "Content-Type": "text/event-stream", "X-Chat-Rejection": rejection } });
     };
     const headers = { Origin: "https://chat.example", Cookie: cookieHeader(issueSession()).split(";")[0], "Content-Type": "application/json" };

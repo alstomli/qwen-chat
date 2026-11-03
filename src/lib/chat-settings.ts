@@ -1,4 +1,6 @@
+import { DEFAULT_MODEL, type ModelId } from "./models";
 export const SETTINGS_KEY = "qwen-chat.settings.v1";
+export const MODEL_SETTINGS_KEY = "qwen-chat.model-settings.v1";
 export const DEFAULT_SETTINGS = {
   inputCharacters: 120000,
   outputTokens: 7680,
@@ -56,12 +58,25 @@ export function fitSettings(value: unknown, limits: ChatSettings = SETTINGS_MAX)
     result[key] = Math.max(SETTINGS_MIN[key], Math.min(limits[key], typeof candidate === "number" && Number.isInteger(candidate) ? candidate : DEFAULT_SETTINGS[key]));
   }
   result.safetyTokens = Math.min(result.safetyTokens, result.contextTokens - SETTINGS_MIN.outputTokens - 1);
+  if (result.outputTokens + result.safetyTokens >= result.contextTokens) {
+    // A smaller server must leave usable input space, not just one token.
+    result.safetyTokens = Math.min(result.safetyTokens, Math.floor(result.contextTokens / 4));
+    result.outputTokens = Math.max(SETTINGS_MIN.outputTokens, Math.floor((result.contextTokens - result.safetyTokens) / 2));
+  }
   result.outputTokens = Math.min(result.outputTokens, result.contextTokens - result.safetyTokens - 1);
   return result;
 }
 
 export function parseSettings(raw: string | null): ChatSettings {
   try { return fitSettings(JSON.parse(raw ?? "null")); } catch { return { ...DEFAULT_SETTINGS }; }
+}
+
+export type ModelSettings = Record<ModelId, ChatSettings>;
+export function parseModelSettings(raw: string | null, legacy: string | null): ModelSettings {
+  let value;
+  try { value = JSON.parse(raw ?? "null"); } catch { value = null; }
+  return { "4bit": value?.["4bit"] ? fitSettings(value["4bit"]) : parseSettings(legacy),
+    bf16: value?.bf16 ? fitSettings(value.bf16) : { ...DEFAULT_SETTINGS } };
 }
 
 export function parseServerLimits(value: unknown): ChatSettings {
@@ -85,10 +100,10 @@ export function gatewaySettings(settings: ChatSettings, limits: ChatSettings): O
   return limits.reuseCachedPrefixes ? settings : numeric;
 }
 
-export function fitMessages<T extends { role: string; content: string }>(messages: T[], settings: ChatSettings, temperature: number): T[] {
+export function fitMessages<T extends { role: string; content: string }>(messages: T[], settings: ChatSettings, temperature: number, model: ModelId = DEFAULT_MODEL): T[] {
   const result = [...messages];
   const oversized = () => result.length > settings.historyMessages || jsonBytes(result) > settings.historyBytes ||
-    jsonBytes({ messages: result, max_tokens: settings.outputTokens, temperature, settings, stream: true }) > settings.requestBytes;
+    jsonBytes({ model, messages: result, max_tokens: settings.outputTokens, temperature, settings, stream: true }) > settings.requestBytes;
   while (result.length > 1 && oversized()) result.splice(0, 2);
   if (oversized()) throw new Error("Your newest message exceeds the history or request byte limit. Raise the limit or shorten the message.");
   return result;

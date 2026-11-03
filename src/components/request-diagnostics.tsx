@@ -43,6 +43,7 @@ export function RequestDiagnostics({ record }: { record: DiagnosticRecord }) {
   }
   return <details className="request-diagnostics">
     <summary>Request diagnostics · {record.status}</summary>
+    {values.selected_model && <p className="diagnostic-caption">{values.selected_model}</p>}
     <p className="diagnostic-caption">Before/after counts include the system instructions and chat template. “Before” starts after browser trimming.</p>
     <p className="diagnostic-caption">Browser timings start at Send; gateway timings use its own clock. First render is estimated after committed answer content and a visible paint opportunity, not an exact display timestamp. Gateway timings arrive at stream end and may be unavailable after cancellation. Use Grafana for engine TTFT and ITL; these durations have different boundaries.</p>
     <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>

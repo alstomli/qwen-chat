@@ -1,6 +1,7 @@
 node_modules/
 .next/
 .next-integration/
+.next-model-ui/
 .env*
 !.env.example
 *.tsbuildinfo
