@@ -6,13 +6,13 @@ import remarkGfm from "remark-gfm";
 import { RequestDiagnostics, exportDiagnostics } from "@/components/request-diagnostics";
 import { DIAGNOSTICS_HEADER, parseDiagnosticHeader, type BrowserTimings, type DiagnosticRecord } from "@/lib/diagnostics";
 import { AnswerPaint } from "@/components/answer-paint";
-import { AdvancedSettings } from "@/components/advanced-settings";
+import { ModelSettingsPanel } from "@/components/model-settings-panel";
 import { DEFAULT_SETTINGS, SETTINGS_MAX, SETTINGS_KEY, MODEL_SETTINGS_KEY, parseModelSettings, fitSettings, fitMessages, jsonBytes, type ModelSettings } from "@/lib/chat-settings";
 import { consumeCompletion } from "@/lib/protocol";
 import { completedHistory, parseConversations, STORAGE_KEY, type Conversation, type Message } from "@/lib/storage";
 
 import { DEFAULT_MODEL, MODELS, modelInfo, type ModelId } from "@/lib/models";
-import { modelStatusRequests, type Connection } from "@/lib/model-status";
+import { allModelStatusRequests, initialModelConnections, updateModelConnection } from "@/lib/model-status";
 const starters = [
   { icon: Feather, label: "Find the right words", text: "Help me write a thoughtful email to reconnect with an old colleague. Keep it warm and natural.", caption: "A first draft, a fresh perspective" },
   { icon: Compass, label: "Make sense of something", text: "Explain how large language models work, using a simple everyday analogy.", caption: "Turn a big idea into a clear one" },
@@ -27,10 +27,11 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   const [chats, setChats] = useState<Conversation[]>([]); const [loaded, setLoaded] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null); const [draft, setDraft] = useState(""); const [search, setSearch] = useState("");
   const [sidebar, setSidebar] = useState(false); const [settings, setSettings] = useState(false); const [deleting, setDeleting] = useState<string | null>(null);
-  const [connectionState, setConnection] = useState<Connection>({ model: DEFAULT_MODEL, mode: "checking", ready: false });
+  const [connections, setConnections] = useState(initialModelConnections);
+  const statusRequests = useRef<ReturnType<typeof allModelStatusRequests> | null>(null);
   const [draftModel, setDraftModel] = useState<ModelId>(DEFAULT_MODEL);
   const [busy, setBusy] = useState<string | null>(null); const [toast, setToast] = useState(""); const [preferences, setPreferences] = useState<ModelSettings>({ "4bit": { ...DEFAULT_SETTINGS }, bf16: { ...DEFAULT_SETTINGS } }); const [temperature, setTemperature] = useState(0.7);
-  const [diagnosticsEnabled, setDiagnosticsEnabled] = useState(false);
+  const [diagnosticsEnabled, setDiagnosticsEnabled] = useState<Record<ModelId, boolean>>({ "4bit": false, bf16: false });
   const [diagnosticRecords, setDiagnosticRecords] = useState<DiagnosticRecord[]>([]);
   const diagnosticsById = new Map(diagnosticRecords.map(record => [record.id, record]));
   function patchDiagnostic(id: string, patch: Partial<DiagnosticRecord>) {
@@ -48,14 +49,14 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   const active = chats.find(c => c.id === activeId); const messages = active?.messages ?? [];
   const selectedModel = active?.model ?? draftModel;
   const selectedLabel = modelInfo(selectedModel).label;
-  const connection: Connection = connectionState.model === selectedModel ? connectionState : { model: selectedModel, mode: "checking", ready: false };
+  const connection = connections[selectedModel];
   const preview = connection.mode === "preview";
   const limits = connection.limits ?? SETTINGS_MAX;
   const effectiveSettings = fitSettings(preferences[selectedModel], limits);
 
   useEffect(() => {
     if (!authenticated) return;
-    try { const stored = parseConversations(localStorage.getItem(STORAGE_KEY)); setChats(stored); setActiveId(stored[0]?.id ?? null); setDiagnosticRecords([]); setDiagnosticsEnabled(false); }
+    try { const stored = parseConversations(localStorage.getItem(STORAGE_KEY)); setChats(stored); setActiveId(stored[0]?.id ?? null); setDiagnosticRecords([]); setDiagnosticsEnabled({ "4bit": false, bf16: false }); }
     catch { setToast("Your browser couldn't load saved conversations."); }
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
@@ -77,11 +78,13 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   }, [preferences, temperature, loaded, authenticated]);
   useEffect(() => {
     if (!authenticated || !loaded) return;
-    setConnection({ model: selectedModel, mode: "checking", ready: false });
-    const requests = modelStatusRequests(selectedModel, setConnection, () => setAuthenticated(false));
+    setConnections(initialModelConnections());
+    const requests = allModelStatusRequests(status => setConnections(current => updateModelConnection(current, status)), () => setAuthenticated(false));
+    statusRequests.current = requests;
     void requests.refresh(); const timer = setInterval(() => { void requests.refresh(); }, 30_000);
-    return () => { requests.dispose(); clearInterval(timer); };
-  }, [authenticated, loaded, selectedModel]);
+    return () => { requests.dispose(); clearInterval(timer); if (statusRequests.current === requests) statusRequests.current = null; };
+  }, [authenticated, loaded]);
+  useEffect(() => { if (settings) void statusRequests.current?.refresh(); }, [settings]);
   useEffect(() => { if (follow.current) bottom.current?.scrollIntoView({ behavior: busy ? "instant" : "smooth" }); }, [chats, busy]);
   useEffect(() => { if (textarea.current) { textarea.current.style.height = "auto"; textarea.current.style.height = Math.min(textarea.current.scrollHeight, 160) + "px"; } }, [draft]);
   useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(""), 6000); return () => clearTimeout(timer); }, [toast]);
@@ -114,7 +117,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     if (controller.current || busy) return;
     if (activeId) setChats(prev => prev.map(chat => chat.id === activeId ? { ...chat, model } : chat));
     else setDraftModel(model);
-    setConnection({ model, mode: "checking", ready: false });
+    void statusRequests.current?.refresh();
   }
   function updateMessage(chatId: string, messageId: string, patch: Partial<Message> | ((m: Message) => Partial<Message>)) {
     setChats(prev => prev.map(chat => chat.id !== chatId ? chat : { ...chat, messages: chat.messages.map(m => m.id === messageId ? { ...m, ...(typeof patch === "function" ? patch(m) : patch) } : m) }));
@@ -131,7 +134,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     let input;
     try { input = fitMessages(candidates, effectiveSettings, temperature, selectedModel); }
     catch (error) { setToast(error instanceof Error ? error.message : "Message exceeds your configured limits."); return; }
-    const captureDiagnostic = diagnosticsEnabled && connection.diagnosticsAvailable === true;
+    const captureDiagnostic = diagnosticsEnabled[selectedModel] && connection.diagnosticsAvailable === true;
     if (captureDiagnostic) setDiagnosticRecords(records => [...records.slice(-99), {
       id: responseId, createdAt: new Date().toISOString(), status: "pending", selectedModel,
       browserOriginalMessages: candidates.length, browserSentMessages: input.length,
@@ -183,7 +186,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   function retry() { const index = messages.findLastIndex(m => m.role === "user"); if (index >= 0) void send(messages[index].content, messages.slice(0, index)); }
   async function logout() {
     controller.current?.abort();
-    try { const res = await fetch("/api/logout", { method: "POST" }); if (!res.ok) throw new Error(); setAuthenticated(false); setSettings(false); setLoaded(false); setChats([]); setDiagnosticRecords([]); setDiagnosticsEnabled(false); setActiveId(null); }
+    try { const res = await fetch("/api/logout", { method: "POST" }); if (!res.ok) throw new Error(); setAuthenticated(false); setSettings(false); setLoaded(false); setChats([]); setDiagnosticRecords([]); setDiagnosticsEnabled({ "4bit": false, bf16: false }); setActiveId(null); }
     catch { setToast("Couldn't sign out. Please try again."); }
   }
   function trapFocus(event: React.KeyboardEvent) {
@@ -222,7 +225,12 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       <div className="composer-region"><div className="composer-wrap">{preview && <div className="preview-note"><Sparkles size={13}/> Local preview · sample replies, no model requests</div>}{connection.mode === "live" && !connection.ready && <div className="offline-note">Your model may be stopped or loading. You can try again when it’s ready.</div>}<form className="composer" onSubmit={e => { e.preventDefault(); void send(); }}><label className="sr-only" htmlFor="message">Message Qwen</label><textarea ref={textarea} id="message" placeholder="What’s on your mind?" value={draft} onChange={e => setDraft(e.target.value)} maxLength={effectiveSettings.inputCharacters} rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}/><div className="composer-bottom"><span className="composer-model">{logo} {selectedLabel}</span><div className="composer-controls"><span className="enter-hint">Shift + Enter for a new line</span>{busy ? <button type="button" className="send-button stop-button" aria-label="Stop generation" onClick={() => controller.current?.abort()}><Square size={15} fill="currentColor"/></button> : <button className="send-button" aria-label="Send message" disabled={!draft.trim()}><ArrowUp size={20}/></button>}</div></div></form><p className="composer-footer">A helpful second perspective. Always give important details a second look.</p></div></div>
     </div>
     {toast && <div className="toast" role="status">{toast}<button onClick={() => setToast("")} aria-label="Dismiss notification"><X size={14}/></button></div>}
-    {(settings || deleting) && <div className="modal-backdrop" onClick={() => { setSettings(false); setDeleting(null); }}><div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" ref={dialog} onKeyDown={trapFocus} onClick={e => e.stopPropagation()}><button className="icon-button close-dialog" onClick={() => { setSettings(false); setDeleting(null); }} aria-label="Close dialog"><X size={20}/></button>{deleting ? <><div className="eyebrow">MAKE A LITTLE ROOM</div><h2 id="dialog-title">Delete this conversation?</h2><p>This removes the conversation from this browser. It can’t be undone.</p><div className="dialog-buttons"><button className="secondary-button" onClick={() => setDeleting(null)}>Keep conversation</button><button className="danger-button" onClick={() => { if (busy === deleting) controller.current?.abort(); setChats(prev => prev.filter(c => c.id !== deleting)); if (activeId === deleting) setActiveId(null); setDeleting(null); }}>Delete conversation</button></div></> : <><div className="eyebrow">MAKE YOURSELF AT HOME</div><h2 id="dialog-title">Your workspace</h2><div className="setting-status"><span className={`status-dot ${connection.ready ? "ready" : ""}`}/><div><strong>{preview ? "Local preview" : connection.mode === "unconfigured" ? "Model connection needed" : connection.ready ? `${selectedLabel} is ready` : `${selectedLabel} unavailable`}</strong><p>{preview ? "Explore the interface with sample replies. These aren't generated by your model." : connection.mode === "unconfigured" ? "Connect your Runpod model to start chatting." : connection.ready ? `Connected to ${selectedLabel}.` : "Your Pod may be stopped or warming up."}</p></div></div><label className="setting-label" htmlFor="temperature">Creativity <span>{temperature.toFixed(1)}</span><input id="temperature" type="range" min="0" max="1.5" step="0.1" value={temperature} onChange={e => setTemperature(Number(e.target.value))}/></label><AdvancedSettings key={JSON.stringify(limits)} value={effectiveSettings} limits={limits} diagnosticsAvailable={connection.diagnosticsAvailable === true} diagnosticsEnabled={diagnosticsEnabled} onDiagnosticsChange={setDiagnosticsEnabled} preview={preview} available={connection.ready && !!connection.limits} busy={!!busy} onApply={next => { setPreferences(prev => ({ ...prev, [selectedModel]: next })); setToast("Settings saved for your next request."); }}/>{connection.error && <p className="form-error" role="status">{connection.error}</p>}{diagnosticRecords.length > 0 && <div className="diagnostic-session"><p className="settings-help">{diagnosticRecords.length} diagnostic records in this session (latest 100). Reloading or signing out clears them.</p><button type="button" className="secondary-button" onClick={() => exportDiagnostics(diagnosticRecords)}>Export session CSV</button></div>}<p className="settings-footnote">Chats stay in this browser. In live mode, messages you send are processed by your model. Older messages may be omitted to fit its context.</p><button className="signout-button" onClick={logout}><LogOut size={16}/> Sign out</button></>}</div></div>}
+    {(settings || deleting) && <div className="modal-backdrop" onClick={() => { setSettings(false); setDeleting(null); }}><div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" ref={dialog} onKeyDown={trapFocus} onClick={e => e.stopPropagation()}><button className="icon-button close-dialog" onClick={() => { setSettings(false); setDeleting(null); }} aria-label="Close dialog"><X size={20}/></button>{deleting ? <><div className="eyebrow">MAKE A LITTLE ROOM</div><h2 id="dialog-title">Delete this conversation?</h2><p>This removes the conversation from this browser. It can’t be undone.</p><div className="dialog-buttons"><button className="secondary-button" onClick={() => setDeleting(null)}>Keep conversation</button><button className="danger-button" onClick={() => { if (busy === deleting) controller.current?.abort(); setChats(prev => prev.filter(c => c.id !== deleting)); if (activeId === deleting) setActiveId(null); setDeleting(null); }}>Delete conversation</button></div></> : <><div className="eyebrow">MAKE YOURSELF AT HOME</div><h2 id="dialog-title">Your workspace</h2><ModelSettingsPanel connections={connections} preferences={preferences} busy={!!busy}
+      temperature={temperature} onTemperatureChange={setTemperature}
+      diagnosticsEnabled={diagnosticsEnabled} onDiagnosticsChange={(model, enabled) => setDiagnosticsEnabled(previous => ({ ...previous, [model]: enabled }))}
+      onRefresh={() => { void statusRequests.current?.refresh(); }}
+      onApply={(model, next) => { setPreferences(previous => ({ ...previous, [model]: next })); setToast(`${modelInfo(model).label} settings saved.`); }}/>
+      {diagnosticRecords.length > 0 && <div className="diagnostic-session"><p className="settings-help">{diagnosticRecords.length} diagnostic records in this session (latest 100). Reloading or signing out clears them.</p><button type="button" className="secondary-button" onClick={() => exportDiagnostics(diagnosticRecords)}>Export session CSV</button></div>}<p className="settings-footnote">Chats stay in this browser. In live mode, messages you send are processed by your model. Older messages may be omitted to fit its context.</p><button className="signout-button" onClick={logout}><LogOut size={16}/> Sign out</button></>}</div></div>}
   </div>;
 }
 

@@ -2,9 +2,9 @@
 
 Advanced settings includes **Reuse cached prefixes**, on by default and saved in this browser. Turning it off makes the gateway isolate each request's prefix cache using a fresh server-generated salt. It does not free reserved GPU memory or disable cache writes. The toggle requires the companion inference-server gateway update; older gateways remain usable with the default behavior and the toggle disabled. Deploy the backend update before the frontend. Deployment requires separate approval.
 
-A personal chat workspace for the existing Qwen model on Runpod. The frontend and server-side API are built with Next.js 16, React 19, and TypeScript, ready for a later Vercel deployment.
+A personal chat workspace for the existing Qwen model on Runpod. The frontend and server-side API are built with Next.js 16, React 19, and TypeScript, deployed to Vercel with local development support.
 
-The frontend runs locally on this PC at `http://127.0.0.1:3001`. It supports selecting **Qwen3.8-27B-4bit** or **Qwen3.8-27B-bf16**, routed to separate authenticated Runpod gateways. The 4bit model remains the default; BF16 requires its own server connection below. The frontend stops when its local process or PC stops.
+The frontend can run locally at `http://127.0.0.1:3001`; the hosted production site is `https://qwen38-chat-zh.vercel.app`. Each deployment has its own server environment configuration. It supports selecting **Qwen3.8-27B-4bit** or **Qwen3.8-27B-bf16**, routed to separate authenticated Runpod gateways. The 4bit model remains the default; BF16 requires its own connection variables on the deployment being used.
 
 ## Choose a model
 
@@ -41,6 +41,38 @@ Advanced preferences are saved separately per model; legacy preferences migrate
 to 4bit. If a smaller context is reported, effective settings leave input space
 without overwriting the stored preferences. Exact token fitting and any old
 exchange removal remain the selected gateway's responsibility.
+
+### Settings for both models
+
+Open **Your workspace** to see both model connections at the top. Each status is
+checked independently; one unavailable or unconfigured model does not hide the
+other model's readiness. **Refresh connections** checks both gateways in parallel.
+
+Below, expand either `Qwen3.8-27B-4bit` or `Qwen3.8-27B-bf16` to edit its own
+Advanced settings. Each section has separate fields, Apply, and Reset controls.
+Editing settings does not change the model selected for the conversation. Unsaved
+drafts remain isolated while opening and closing either section; Apply and Reset
+update only that model's browser preferences. Shared initial defaults remain
+40,960 context tokens, 7,680 output tokens, and 32 safety tokens. Creativity
+retains its existing shared behavior; diagnostics opt-ins are per model and per
+session.
+
+A model with current verified limits is editable. During a temporary outage,
+its own last verified limits remain available in that browser page, clearly
+labeled as such. A never-verified connection stays disabled until its limits
+can be checked; another model's limits are never borrowed. Every chat request
+still verifies the currently selected gateway and actual limits before sending.
+
+### Hosted connection configuration
+
+Local `.env.local` settings do not configure Vercel. Add both BF16 connection
+variables to the intended Vercel environment as server-only values, alongside
+the existing 4bit connection, then redeploy. Configure Production and Preview
+separately as needed. A missing `RUNPOD_BF16_CHAT_URL` or
+`RUNPOD_BF16_CHAT_TOKEN` produces **Gateway connection not configured** for BF16;
+it does not mean the BF16 Pod itself is stopped. This was the cause of the
+hosted site's missing BF16 connection while the local frontend could reach both
+Pods. Keep credentials private and never prefix them with `NEXT_PUBLIC_`.
 
 Verification includes `npm test`, `npm run typecheck`, and `npm run build`.
 The model tests use two distinct mock upstreams and credentials; live acceptance
@@ -108,7 +140,7 @@ The gateway advertises versioned limits through authenticated `/health`, reads a
 
 Deploy both updated projects together. An older gateway cannot enforce these settings; the frontend reports that it needs updating rather than silently ignoring preferences. The 40,960-token serving configuration started successfully on the live GPU. Live smoke tests verified a 128-token output cap, a 5-character input rejection, a 512-token context budget trimming one old exchange, and rejection above the deployed context ceiling. These checks do not benchmark maximum-length generation or sustained load. Existing Pod `MAX_MODEL_LEN` overrides still take precedence.
 
-## Later Vercel deployment
+## Vercel deployment
 
 Import this folder as a Next.js project using a supported Node.js 22+ runtime. Add these server-side environment variables:
 
@@ -117,11 +149,13 @@ Import this folder as a Next.js project using a supported Node.js 22+ runtime. A
 | `CHAT_PASSWORD` | A non-empty personal workspace password; no minimum length |
 | `SESSION_SECRET` | Random signing secret, at least 32 characters |
 | `RUNPOD_CHAT_URL` | HTTPS origin of the deployed chat gateway |
-| `RUNPOD_CHAT_TOKEN` | Matching separate chat gateway token |
+| `RUNPOD_CHAT_TOKEN` | Matching separate 4bit chat gateway token |
+| `RUNPOD_BF16_CHAT_URL` | BF16 gateway HTTPS origin |
+| `RUNPOD_BF16_CHAT_TOKEN` | Matching separate BF16 chat gateway token |
 
 Never use `NEXT_PUBLIC_` for credentials. Local preview is forcibly disabled in production, even if `CHAT_PREVIEW_MODE=true`; missing gateway configuration returns an honest setup/unavailable response. The chat route declares a 300-second maximum execution time for Vercel Hobby compatibility. This includes validation, waiting for the model, and streaming the reply. The configurable generation timeout can be longer locally, but it does not override Vercel’s execution limit; on Vercel, choose a timeout below 300 seconds. Login throttling is best-effort per server instance; it is not a distributed account lockout. Add centralized rate limiting and proper user accounts before opening the app to multiple people.
 
-No Vercel project, GitHub repository, or frontend cloud deployment was created. The live model and chat gateway run on the existing Runpod Pod.
+The hosted frontend uses its configured Vercel environment and is linked to `main`; merging changes there triggers a deployment. The two model engines and authenticated gateways run on their separate Runpod Pods. Updating server-side connection variables requires a new frontend deployment.
 
 ## Verification
 
