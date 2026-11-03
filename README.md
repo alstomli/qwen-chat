@@ -4,7 +4,48 @@ Advanced settings includes **Reuse cached prefixes**, on by default and saved in
 
 A personal chat workspace for the existing Qwen model on Runpod. The frontend and server-side API are built with Next.js 16, React 19, and TypeScript, ready for a later Vercel deployment.
 
-**Current status (November 1, 2026):** the production frontend is running on this PC at `http://127.0.0.1:3001`; it has not been deployed to Vercel. Active Runpod Pod `fj04zaugwd1u83` uses `zihan000/qwen-inference:0.3.0`, with authenticated chat and monitoring startup. The model is ready and advertises a verified 40,960-token context ceiling. Frontend Advanced settings are enforced by the deployed gateway. The local `.env.local` points to `https://fj04zaugwd1u83-8001.proxy.runpod.net`; preview mode is disabled. The frontend stops when its local process or PC stops.
+The frontend runs locally on this PC at `http://127.0.0.1:3001`. It supports selecting **Qwen3.8-27B-4bit** or **Qwen3.8-27B-bf16**, routed to separate authenticated Runpod gateways. The 4bit model remains the default; BF16 requires its own server connection below. The frontend stops when its local process or PC stops.
+
+## Choose a model
+
+The header selector switches the next request between `Qwen3.8-27B-4bit` and
+`Qwen3.8-27B-bf16`. Both Pods remain running; selecting a model does not reload
+weights. Selection is saved with each conversation, and assistant messages retain
+the model that generated them even after a later switch. Old conversations use
+4bit. Switching is disabled while a reply is running; stop the reply first.
+
+Configure the local frontend's ignored `.env.local` and restart its process:
+
+| Model | Gateway origin | Server-side credential |
+| --- | --- | --- |
+| `4bit` (default) | `RUNPOD_CHAT_URL` | `RUNPOD_CHAT_TOKEN` |
+| `bf16` | `RUNPOD_BF16_CHAT_URL` | `RUNPOD_BF16_CHAT_TOKEN` |
+
+The BF16 gateway origin is `https://ftntkktzid9f4p-8001.proxy.runpod.net`.
+The existing 4bit gateway remains
+`https://rp93m3noz3l9lt-8001.proxy.runpod.net`. Use the matching private chat
+credential for each Pod; monitoring credentials are separate. Never use
+`NEXT_PUBLIC_` for either connection or credential.
+
+Browser requests contain only the allowlisted public ID `4bit` or `bf16`.
+The Next.js server chooses its configured endpoint and token, verifies the
+reported serving alias (`qwen` / `qwen-bf16`), and strips the public selector
+before forwarding. Unknown IDs are rejected; an unavailable BF16 target never
+falls back to 4bit. Credentials and gateway origins are not returned in status.
+
+Each selection refreshes readiness, diagnostics support, and actual server
+limits before sending. Late responses from a previous selection are discarded.
+Both model profiles initially use the same defaults: 40,960 context tokens,
+7,680 output tokens, and 32 safety tokens. Actual gateway limits take precedence.
+Advanced preferences are saved separately per model; legacy preferences migrate
+to 4bit. If a smaller context is reported, effective settings leave input space
+without overwriting the stored preferences. Exact token fitting and any old
+exchange removal remain the selected gateway's responsibility.
+
+Verification includes `npm test`, `npm run typecheck`, and `npm run build`.
+The model tests use two distinct mock upstreams and credentials; live acceptance
+must separately confirm readiness, a streamed reply from each model, stopping,
+selection persistence, and the selected model's limits.
 
 ## Run locally
 

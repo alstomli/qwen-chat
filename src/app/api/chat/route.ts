@@ -21,7 +21,8 @@ export async function POST(request: Request) {
   }
   catch (error) { return jsonError(error instanceof Error ? error.message : "Invalid message.", 400); }
   try {
-    const config = connectionConfig();
+    const { model, ...gatewayInput } = input;
+    const config = connectionConfig(model);
     if (config.mode === "unconfigured") return jsonError("The model connection hasn't been configured yet.", 503);
     if (config.mode === "preview") {
       if (diagnosticRequested) return jsonError("Diagnostics require a live model connection.", 400);
@@ -59,7 +60,7 @@ export async function POST(request: Request) {
     try {
       upstream = await fetch(config.base + "/v1/chat/completions", {
         method: "POST", headers: { Authorization: "Bearer " + config.token, "Content-Type": "application/json", ...(diagnosticRequested ? { [DIAGNOSTICS_HEADER]: "1" } : {}) },
-        body: JSON.stringify({ ...input, settings, stream: true }), signal: controller.signal, cache: "no-store"
+        body: JSON.stringify({ ...gatewayInput, settings, stream: true }), signal: controller.signal, cache: "no-store"
       });
     } catch (error) {
       clearTimeout(timer); request.signal.removeEventListener("abort", cancel);
