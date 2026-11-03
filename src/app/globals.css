@@ -45,3 +45,21 @@
 .model-picker option { color: #20221f; background: #fff; }
 .composer-model { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 700px) { .workspace-heading .header-label, .workspace-heading .header-slash { display: none; } .model-picker select { font-size: 11px; padding-left: 0; } .composer-model { font-size: 10px; } }
+
+.model-connections { margin: 22px 0; }
+.model-connections-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.model-connections-heading h3 { font-size: 15px; margin: 0; }
+.model-connections-heading button { font-size: 11px; text-decoration: underline; padding: 5px 0; }
+.model-status-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.model-status-card { border: 1px solid #d9dfd1; border-radius: 8px; padding: 13px; background: #f5f7f1; min-width: 0; }
+.model-status-card strong { font-size: 12px; overflow-wrap: anywhere; }
+.model-status-card p { display: flex; align-items: center; gap: 6px; font-size: 12px; margin: 10px 0 5px; }
+.model-status-card small { display: block; font-size: 11px; color: #67715e; line-height: 1.5; overflow-wrap: anywhere; }
+.model-status-card .status-dot { flex-shrink: 0; }
+.model-settings-list { margin-top: 22px; }
+.model-settings-section { border: 1px solid #d9dfd1; border-radius: 8px; margin-top: 12px; }
+.model-settings-section > summary { padding: 15px; cursor: pointer; font-size: 12px; overflow-wrap: anywhere; }
+.model-settings-section > summary strong { margin-right: 12px; }
+.model-settings-section > summary span { color: #67715e; font-size: 11px; }
+.model-settings-section > .advanced-settings { margin: 0; padding: 16px; }
+@media (max-width: 520px) { .model-status-grid { grid-template-columns: 1fr; } .model-settings-section > summary span { display: block; margin-top: 6px; } }

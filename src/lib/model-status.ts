@@ -1,10 +1,21 @@
 import type { ChatSettings } from "./chat-settings";
-import type { ModelId } from "./models";
+import { MODELS, type ModelId } from "./models";
 
 export type Connection = {
   model: ModelId; mode: "checking" | "live" | "preview" | "unconfigured";
   ready: boolean; limits?: ChatSettings; error?: string; diagnosticsAvailable?: boolean;
+  lastVerifiedLimits?: ChatSettings;
 };
+
+export type ModelConnections = Record<ModelId, Connection>;
+export function initialModelConnections(): ModelConnections {
+  return { "4bit": { model: "4bit", mode: "checking", ready: false }, bf16: { model: "bf16", mode: "checking", ready: false } };
+}
+export function updateModelConnection(current: ModelConnections, next: Connection): ModelConnections {
+  const lastVerifiedLimits = next.mode === "live" && next.ready && next.limits
+    ? next.limits : current[next.model].lastVerifiedLimits;
+  return { ...current, [next.model]: { ...next, lastVerifiedLimits } };
+}
 
 /** A later refresh or selection always wins, even if an old fetch ignores abort. */
 export function modelStatusRequests(model: ModelId, receive: (status: Connection) => void,
@@ -28,4 +39,10 @@ export function modelStatusRequests(model: ModelId, receive: (status: Connection
     },
     dispose() { disposed = true; version++; current?.abort(); },
   };
+}
+
+/** Each model has its own request identity and failure state. */
+export function allModelStatusRequests(receive: (status: Connection) => void, unauthorized: () => void, fetcher: typeof fetch = fetch) {
+  const requests = MODELS.map(model => modelStatusRequests(model.id, receive, unauthorized, fetcher));
+  return { refresh: () => Promise.allSettled(requests.map(request => request.refresh())), dispose: () => requests.forEach(request => request.dispose()) };
 }
