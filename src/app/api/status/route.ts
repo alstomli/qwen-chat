@@ -14,6 +14,8 @@ export async function GET(request: Request) {
     if (config.mode !== "live") return Response.json({ model, mode: config.mode, ready: config.mode === "preview", limits: SETTINGS_MAX, diagnosticsAvailable: false, diagnosticsVersion: 0 }, { headers: { "Cache-Control": "no-store" } });
     const capabilities = await gatewayCapabilities(config);
     const diagnosticsAvailable = diagnosticsAllowed() && capabilities.diagnosticsVersion === 1;
-    return Response.json({ model, mode: "live", ready: true, limits: capabilities.limits, diagnosticsAvailable, diagnosticsVersion: diagnosticsAvailable ? 1 : 0 }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json({ model, mode: "live", ready: true, limits: capabilities.limits, diagnosticsAvailable,
+      adapterToggleAvailable: capabilities.adapterToggleAvailable,
+      diagnosticsVersion: diagnosticsAvailable ? 1 : 0 }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) { return Response.json({ model, mode: "live", ready: false, error: error instanceof Error ? error.message : "Model unavailable." }, { headers: { "Cache-Control": "no-store" } }); }
 }

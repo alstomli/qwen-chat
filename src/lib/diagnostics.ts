@@ -1,5 +1,5 @@
 import type { ChatSettings } from "./chat-settings";
-import { modelInfo, type ModelId } from "./models";
+import { answerModelLabel, type ModelId } from "./models";
 export const DIAGNOSTICS_HEADER = "X-Chat-Diagnostics";
 export type GatewayTimings = {
   contextFitMs: number | null; upstreamFirstContentMs: number | null;
@@ -21,6 +21,7 @@ export type GatewayDiagnostic = {
 export type DiagnosticRecord = {
   id: string; createdAt: string;
   selectedModel?: ModelId;
+  useAdapter?: boolean;
   status: "pending" | "streaming" | "completed" | "stopped" | "interrupted" | "error";
   browserOriginalMessages: number; browserSentMessages: number;
   browserOriginalBytes: number; browserSentBytes: number;
@@ -80,7 +81,7 @@ export function diagnosticValues(record: DiagnosticRecord) {
   const after = g?.inputTokensAfter ?? null;
   return {
     request_id: g?.requestId ?? record.id, created_at: record.createdAt, status: record.status,
-    selected_model: record.selectedModel ? modelInfo(record.selectedModel).label : null,
+    selected_model: record.selectedModel ? answerModelLabel(record.selectedModel, record.useAdapter) : null,
     model: g?.model ?? null, browser_messages_before: record.browserOriginalMessages,
     browser_messages_sent: record.browserSentMessages,
     browser_bytes_before: record.browserOriginalBytes, browser_bytes_sent: record.browserSentBytes,

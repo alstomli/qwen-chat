@@ -2,12 +2,15 @@ import { validateSettings, jsonBytes, type ChatSettings } from "./chat-settings"
 import { parseUsage, parseTimingEvent, type GatewayTimingEvent, type TokenUsage } from "./diagnostics";
 import { parseModelId, type ModelId } from "./models";
 export type ChatMessage = { role: "user" | "assistant"; content: string };
-export type ChatInput = { model: ModelId; messages: ChatMessage[]; max_tokens: number; temperature: number; settings: ChatSettings };
+export type ChatInput = { model: ModelId; useAdapter?: boolean; messages: ChatMessage[]; max_tokens: number; temperature: number; settings: ChatSettings };
 
 export function validateInput(value: unknown): ChatInput {
   if (!value || typeof value !== "object") throw new Error("Please send a message.");
   const data = value as Record<string, unknown>;
   const model = parseModelId(data.model);
+  if (data.useAdapter !== undefined && (model !== "bf16" || typeof data.useAdapter !== "boolean"))
+    throw new Error("Adapter selection must be a boolean for the BF16 model.");
+  const useAdapter = data.useAdapter as boolean | undefined;
   if (!Array.isArray(data.messages) || !data.messages.length || data.messages.length > 800)
     throw new Error("Start a new conversation or send fewer messages.");
   const messages = data.messages.map((item: unknown, index: number): ChatMessage => {
@@ -30,7 +33,7 @@ export function validateInput(value: unknown): ChatInput {
   validateSettings(settings);
   if (messages.at(-1)!.content.length > settings.inputCharacters) throw new Error("Input character limit exceeded.");
   if (messages.length > settings.historyMessages || jsonBytes(messages) > settings.historyBytes) throw new Error("History limit exceeded.");
-  const input = { model, messages, max_tokens, temperature, settings };
+  const input = { model, ...(useAdapter === undefined ? {} : { useAdapter }), messages, max_tokens, temperature, settings };
   if (jsonBytes({ ...input, stream: true }) > settings.requestBytes) throw new Error("Request byte limit exceeded.");
   return input;
 }

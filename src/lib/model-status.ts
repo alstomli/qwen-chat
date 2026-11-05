@@ -5,6 +5,7 @@ export type Connection = {
   model: ModelId; mode: "checking" | "live" | "preview" | "unconfigured";
   ready: boolean; limits?: ChatSettings; error?: string; diagnosticsAvailable?: boolean;
   lastVerifiedLimits?: ChatSettings;
+  adapterToggleAvailable?: boolean;
 };
 
 export type ModelConnections = Record<ModelId, Connection>;

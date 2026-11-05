@@ -47,6 +47,8 @@ export async function POST(request: Request) {
     let settings;
     try {
       const capabilities = await gatewayCapabilities(config);
+      if (input.useAdapter !== undefined && !capabilities.adapterToggleAvailable)
+        return jsonError("Adapter selection is unavailable for this connection.", 503);
       if (diagnosticRequested && capabilities.diagnosticsVersion !== 1) return jsonError("Enable diagnostics on an updated gateway first.", 503);
       settings = gatewaySettings(input.settings, capabilities.limits);
     }
@@ -66,6 +68,11 @@ export async function POST(request: Request) {
       clearTimeout(timer); request.signal.removeEventListener("abort", cancel);
       if (timedOut) return jsonError("Your request timed out while waiting for the model to start a reply. Please try again.", 504);
       throw error;
+    }
+    if (upstream.ok && input.useAdapter !== undefined && upstream.headers.get("X-Chat-Adapter-Enabled") !== String(input.useAdapter)) {
+      clearTimeout(timer); request.signal.removeEventListener("abort", cancel);
+      await upstream.body?.cancel(); controller.abort();
+      return jsonError("The selected adapter mode could not be verified.", 503);
     }
     const diagnostic = diagnosticRequested ? parseDiagnosticHeader(upstream.headers.get(DIAGNOSTICS_HEADER)) : null;
     const diagnosticHeaders: Record<string, string> = diagnostic ? { [DIAGNOSTICS_HEADER]: JSON.stringify(diagnostic) } : {};
@@ -93,7 +100,9 @@ export async function POST(request: Request) {
         } catch (error) { finish(); controller.error(error); }
       }, async cancel() { cancel(); finish(); await reader.cancel().catch(() => {}); }
     });
-    return new Response(stream, { headers: { ...streamHeaders, ...diagnosticHeaders, "X-Context-Trimmed": upstream.headers.get("X-Context-Trimmed") ?? "0" } });
+    return new Response(stream, { headers: { ...streamHeaders, ...diagnosticHeaders,
+      ...(input.useAdapter === undefined ? {} : { "X-Chat-Adapter-Enabled": String(input.useAdapter) }),
+      "X-Context-Trimmed": upstream.headers.get("X-Context-Trimmed") ?? "0" } });
   } catch { return jsonError("Couldn't reach your model. It may be stopped or loading. Please try again.", 503); }
 }
 function previewReply(prompt: string) {

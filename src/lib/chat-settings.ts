@@ -100,10 +100,10 @@ export function gatewaySettings(settings: ChatSettings, limits: ChatSettings): O
   return limits.reuseCachedPrefixes ? settings : numeric;
 }
 
-export function fitMessages<T extends { role: string; content: string }>(messages: T[], settings: ChatSettings, temperature: number, model: ModelId = DEFAULT_MODEL): T[] {
+export function fitMessages<T extends { role: string; content: string }>(messages: T[], settings: ChatSettings, temperature: number, model: ModelId = DEFAULT_MODEL, useAdapter?: boolean): T[] {
   const result = [...messages];
   const oversized = () => result.length > settings.historyMessages || jsonBytes(result) > settings.historyBytes ||
-    jsonBytes({ model, messages: result, max_tokens: settings.outputTokens, temperature, settings, stream: true }) > settings.requestBytes;
+    jsonBytes({ model, useAdapter, messages: result, max_tokens: settings.outputTokens, temperature, settings, stream: true }) > settings.requestBytes;
   while (result.length > 1 && oversized()) result.splice(0, 2);
   if (oversized()) throw new Error("Your newest message exceeds the history or request byte limit. Raise the limit or shorten the message.");
   return result;
