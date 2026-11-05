@@ -16,6 +16,7 @@ export async function GET(request: Request) {
     const diagnosticsAvailable = diagnosticsAllowed() && capabilities.diagnosticsVersion === 1;
     return Response.json({ model, mode: "live", ready: true, limits: capabilities.limits, diagnosticsAvailable,
       adapterToggleAvailable: capabilities.adapterToggleAvailable,
+      ...(capabilities.imageInput ? { imageInputVersion: 1, imageInput: capabilities.imageInput } : {}),
       diagnosticsVersion: diagnosticsAvailable ? 1 : 0 }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) { return Response.json({ model, mode: "live", ready: false, error: error instanceof Error ? error.message : "Model unavailable." }, { headers: { "Cache-Control": "no-store" } }); }
 }

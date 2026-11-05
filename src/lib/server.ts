@@ -1,5 +1,6 @@
 import { SETTINGS_MAX, parseServerLimits } from "./chat-settings";
 import { DEFAULT_MODEL, modelInfo, parseModelId, type ModelId } from "./models";
+import { parseImageInputLimits } from "./image-input";
 export const MAX_BODY = SETTINGS_MAX.requestBytes;
 export async function readJson(request: Request, limitForValue?: (value: unknown) => number) {
   if (!request.headers.get("content-type")?.includes("application/json")) throw new Error("Expected a JSON request.");
@@ -45,7 +46,8 @@ export async function gatewayCapabilities(config: ReturnType<typeof connectionCo
   if (body.ready !== true || body.model !== modelInfo(config.model).alias) throw new Error("The selected model could not be verified at its gateway.");
   if (body.settingsVersion !== 1) throw new Error("Update the chat gateway to use configurable settings.");
   return { limits: parseServerLimits(body.limits), diagnosticsVersion: body.diagnosticsVersion === 1 ? 1 : 0,
-    adapterToggleAvailable: config.model === "bf16" && body.adapterToggleVersion === 1 && body.adapterToggleAvailable === true };
+    adapterToggleAvailable: config.model === "bf16" && body.adapterToggleVersion === 1 && body.adapterToggleAvailable === true,
+    imageInput: config.model === "bf16" && body.imageInputVersion === 1 ? parseImageInputLimits(body.imageInput) : undefined };
 }
 export async function gatewayLimits(config: ReturnType<typeof connectionConfig>) {
   return (await gatewayCapabilities(config)).limits;

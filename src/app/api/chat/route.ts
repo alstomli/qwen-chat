@@ -3,6 +3,7 @@ import { connectionConfig, gatewayCapabilities, diagnosticsAllowed, jsonError, r
 import { DIAGNOSTICS_HEADER, parseDiagnosticHeader } from "@/lib/diagnostics";
 import { validateInput } from "@/lib/protocol";
 import { validateSettings, gatewaySettings } from "@/lib/chat-settings";
+import { IMAGE_ACCEPTED_HEADER, IMAGE_ADAPTER_ERROR, IMAGE_UNSUPPORTED_ERROR, validateImageInput } from "@/lib/image-input";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
@@ -25,6 +26,7 @@ export async function POST(request: Request) {
     const config = connectionConfig(model);
     if (config.mode === "unconfigured") return jsonError("The model connection hasn't been configured yet.", 503);
     if (config.mode === "preview") {
+      if (input.image) return jsonError(IMAGE_UNSUPPORTED_ERROR, 400);
       if (diagnosticRequested) return jsonError("Diagnostics require a live model connection.", 400);
       const encoder = new TextEncoder(); let timer: ReturnType<typeof setTimeout>; let index = 0;
       const words = previewReply(input.messages.at(-1)!.content).match(/\S+\s*/g) ?? [];
@@ -47,6 +49,11 @@ export async function POST(request: Request) {
     let settings;
     try {
       const capabilities = await gatewayCapabilities(config);
+      if (input.image) {
+        if (!capabilities.imageInput) return jsonError(IMAGE_UNSUPPORTED_ERROR, 400);
+        if (capabilities.adapterToggleAvailable && input.useAdapter !== false) return jsonError(IMAGE_ADAPTER_ERROR, 400);
+        validateImageInput(input.image, capabilities.imageInput);
+      }
       if (input.useAdapter !== undefined && !capabilities.adapterToggleAvailable)
         return jsonError("Adapter selection is unavailable for this connection.", 503);
       if (diagnosticRequested && capabilities.diagnosticsVersion !== 1) return jsonError("Enable diagnostics on an updated gateway first.", 503);
@@ -69,10 +76,12 @@ export async function POST(request: Request) {
       if (timedOut) return jsonError("Your request timed out while waiting for the model to start a reply. Please try again.", 504);
       throw error;
     }
-    if (upstream.ok && input.useAdapter !== undefined && upstream.headers.get("X-Chat-Adapter-Enabled") !== String(input.useAdapter)) {
+    const imageVerified = !input.image || upstream.headers.get(IMAGE_ACCEPTED_HEADER) === "true";
+    const adapterVerified = input.useAdapter === undefined || upstream.headers.get("X-Chat-Adapter-Enabled") === String(input.useAdapter);
+    if (upstream.ok && (!imageVerified || !adapterVerified)) {
       clearTimeout(timer); request.signal.removeEventListener("abort", cancel);
       await upstream.body?.cancel(); controller.abort();
-      return jsonError("The selected adapter mode could not be verified.", 503);
+      return jsonError(!imageVerified ? "The model did not confirm receipt of the attached image." : "The selected adapter mode could not be verified.", 503);
     }
     const diagnostic = diagnosticRequested ? parseDiagnosticHeader(upstream.headers.get(DIAGNOSTICS_HEADER)) : null;
     const diagnosticHeaders: Record<string, string> = diagnostic ? { [DIAGNOSTICS_HEADER]: JSON.stringify(diagnostic) } : {};
@@ -85,6 +94,11 @@ export async function POST(request: Request) {
       if (upstream.status === 429 && rejection === "rate_limit") message = "The chat request rate limit has been reached. Please wait a minute and try again.";
       if (upstream.status === 504 && rejection === "queue_timeout") message = "Your request timed out while waiting for the model. Please try again.";
       if (upstream.status === 413 || upstream.status === 400) message = "This message is too long for the model. Shorten it or start a new chat.";
+      if (input.image && upstream.status === 413) message = "The image and prompt exceed the model's request limit. Try a smaller image or a shorter prompt.";
+      if (input.image && rejection === "image_adapter") message = IMAGE_ADAPTER_ERROR;
+      if (input.image && rejection === "image_unsupported") message = IMAGE_UNSUPPORTED_ERROR;
+      if (input.image && rejection === "image_invalid") message = "The model rejected the attached image. Try a different JPEG, PNG, or WebP file.";
+      if (input.image && rejection === "image_processing") message = "The model could not process the attached image. Try again.";
       await upstream.body?.cancel();
       const response = jsonError(message, [400, 413, 429].includes(upstream.status) || (upstream.status === 504 && rejection === "queue_timeout") ? upstream.status : 503);
       for (const [key, value] of Object.entries(diagnosticHeaders)) response.headers.set(key, value);
@@ -102,6 +116,7 @@ export async function POST(request: Request) {
     });
     return new Response(stream, { headers: { ...streamHeaders, ...diagnosticHeaders,
       ...(input.useAdapter === undefined ? {} : { "X-Chat-Adapter-Enabled": String(input.useAdapter) }),
+      ...(input.image ? { [IMAGE_ACCEPTED_HEADER]: "true" } : {}),
       "X-Context-Trimmed": upstream.headers.get("X-Context-Trimmed") ?? "0" } });
   } catch { return jsonError("Couldn't reach your model. It may be stopped or loading. Please try again.", 503); }
 }
