@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { ArrowUp, ArrowUpRight, Check, ChevronDown, Code2, Compass, Copy, Feather, LoaderCircle, LogOut, Menu, MessageSquare, PanelLeftClose, Plus, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, X, RotateCcw } from "lucide-react";
+import { ArrowUp, ArrowUpRight, Check, ChevronDown, Code2, Compass, Copy, Feather, ImagePlus, LoaderCircle, LogOut, Menu, MessageSquare, PanelLeftClose, Plus, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, X, RotateCcw } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { RequestDiagnostics, exportDiagnostics } from "@/components/request-diagnostics";
@@ -9,6 +9,8 @@ import { AnswerPaint } from "@/components/answer-paint";
 import { ModelSettingsPanel } from "@/components/model-settings-panel";
 import { DEFAULT_SETTINGS, SETTINGS_MAX, SETTINGS_KEY, MODEL_SETTINGS_KEY, parseModelSettings, fitSettings, fitMessages, jsonBytes, type ModelSettings } from "@/lib/chat-settings";
 import { consumeCompletion } from "@/lib/protocol";
+import { IMAGE_ACCEPTED_HEADER, IMAGE_ADAPTER_ERROR, validateImageInput } from "@/lib/image-input";
+import { prepareImage, type ImageAttachment } from "@/lib/prepare-image";
 import { completedHistory, parseConversations, STORAGE_KEY, type Conversation, type Message } from "@/lib/storage";
 
 import { DEFAULT_MODEL, MODELS, modelInfo, answerModelLabel, type ModelId } from "@/lib/models";
@@ -26,6 +28,13 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   const [password, setPassword] = useState(""); const [loginError, setLoginError] = useState(""); const [signingIn, setSigningIn] = useState(false);
   const [chats, setChats] = useState<Conversation[]>([]); const [loaded, setLoaded] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null); const [draft, setDraft] = useState(""); const [search, setSearch] = useState("");
+  const [attachment, setAttachment] = useState<ImageAttachment | null>(null);
+  const [readingImage, setReadingImage] = useState(false);
+  const [retryImageId, setRetryImageId] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const imageRead = useRef(0);
+  const sentImages = useRef(new Map<string, { chatId: string; attachment: ImageAttachment }>());
+  const savedDrafts = useRef(new Map<string | null, { text: string; attachment: ImageAttachment | null; retryId: string | null }>());
   const [sidebar, setSidebar] = useState(false); const [settings, setSettings] = useState(false); const [deleting, setDeleting] = useState<string | null>(null);
   const [connections, setConnections] = useState(initialModelConnections);
   const statusRequests = useRef<ReturnType<typeof allModelStatusRequests> | null>(null);
@@ -56,6 +65,10 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   const preview = connection.mode === "preview";
   const limits = connection.limits ?? SETTINGS_MAX;
   const effectiveSettings = fitSettings(preferences[selectedModel], limits);
+  const imageInput = selectedModel === "bf16" && connection.mode === "live" && connection.ready ? connection.imageInput : undefined;
+  const imageUnavailable = selectedModel !== "bf16" ? "Select the BF16 model to attach an image."
+    : !imageInput ? "Image attachments require a connected BF16 gateway with image input enabled."
+    : adapterAvailable && selectedAdapter ? IMAGE_ADAPTER_ERROR : "";
 
   useEffect(() => {
     if (!authenticated) return;
@@ -115,7 +128,54 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     } catch (error) { setLoginError(error instanceof Error ? error.message : "Couldn't sign in. Try again."); }
     finally { setSigningIn(false); }
   }
-  function newChat() { controller.current?.abort(); setDraftModel(selectedModel); setDraftAdapter(true); setActiveId(null); setDraft(""); setSidebar(false); follow.current = true; textarea.current?.focus(); }
+  function clearDraft() {
+    removeAttachment();
+    setDraft(""); setRetryImageId(null);
+  }
+  function removeAttachment() {
+    imageRead.current++;
+    setReadingImage(false); setAttachment(null);
+  }
+  function switchConversation(id: string | null) {
+    if (readingImage) { setToast("Wait for the image to finish preparing before switching conversations."); return false; }
+    if (id !== activeId) {
+      if (attachment || retryImageId) savedDrafts.current.set(activeId, { text: draft, attachment, retryId: retryImageId });
+      const pending = savedDrafts.current.get(id);
+      savedDrafts.current.delete(id);
+      setActiveId(id);
+      setDraft(pending?.text ?? "");
+      setAttachment(pending?.attachment ?? null);
+      setRetryImageId(pending?.retryId ?? null);
+    }
+    setSidebar(false); follow.current = true;
+    return true;
+  }
+  function newChat() {
+    if (!switchConversation(null)) return;
+    if (activeId === null && !attachment && !retryImageId) clearDraft();
+    controller.current?.abort();
+    setDraftModel(selectedModel); setDraftAdapter(true); textarea.current?.focus();
+  }
+  async function chooseImage(file: File) {
+    if (imageUnavailable || !imageInput) { setToast(imageUnavailable); return; }
+    const version = ++imageRead.current;
+    setReadingImage(true);
+    try {
+      const wireWithoutImageData = jsonBytes({
+        model: selectedModel, useAdapter: adapterAvailable ? selectedAdapter : undefined,
+        messages: [{ role: "user", content: draft.trim() || " " }],
+        max_tokens: effectiveSettings.outputTokens, temperature, settings: effectiveSettings,
+        image: "data:image/jpeg;base64,", stream: true,
+      });
+      const imageBudget = Math.floor((effectiveSettings.requestBytes - wireWithoutImageData) / 4) * 3;
+      const next = await prepareImage(file, imageInput, imageBudget);
+      if (version === imageRead.current) setAttachment(next);
+    } catch (error) {
+      if (version === imageRead.current) setToast(error instanceof Error ? error.message : "Couldn't prepare this image.");
+    } finally {
+      if (version === imageRead.current) setReadingImage(false);
+    }
+  }
   function selectAdapter(useAdapter: boolean) {
     if (controller.current || busy || !adapterAvailable) return;
     if (activeId) setChats(previous => previous.map(chat => chat.id === activeId ? { ...chat, useAdapter } : chat));
@@ -130,7 +190,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   function updateMessage(chatId: string, messageId: string, patch: Partial<Message> | ((m: Message) => Partial<Message>)) {
     setChats(prev => prev.map(chat => chat.id !== chatId ? chat : { ...chat, messages: chat.messages.map(m => m.id === messageId ? { ...m, ...(typeof patch === "function" ? patch(m) : patch) } : m) }));
   }
-  async function send(text = draft, history = messages) {
+  async function send(text = draft, retryId: string | null = retryImageId, image = attachment) {
     const submitted = performance.now();
     text = text.trim(); if (!text || controller.current) return;
     if (chats.length >= 100 && !activeId) { setToast("You have 100 saved chats. Delete one before starting another."); return; }
@@ -138,11 +198,21 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     if (selectedModel === "bf16" && selectedAdapter === false && !adapterAvailable) { setToast("Adapter selection is unavailable. Reconnect or start a new conversation."); return; }
     const useAdapter = adapterAvailable ? selectedAdapter : undefined;
     if (text.length > effectiveSettings.inputCharacters) { setToast(`Please shorten your message to ${effectiveSettings.inputCharacters.toLocaleString()} characters or fewer.`); return; }
-    const id = activeId ?? uid(); const responseId = uid();
-    const pending: Message[] = [...history, { id: uid(), role: "user", content: text }, { id: responseId, role: "assistant", content: "", model: selectedModel, useAdapter }];
+    const retryIndex = retryId ? messages.findIndex(message => message.id === retryId && message.role === "user") : -1;
+    if (retryId && retryIndex < 0) { setToast("This earlier message is unavailable. Cancel the retry to start a new message."); return; }
+    if (retryIndex >= 0 && messages[retryIndex].imageName && !image) { setToast("Reattach the image to retry this prompt."); return; }
+    if (readingImage) { setToast("Wait for your image to finish preparing."); return; }
+    if (image) {
+      if (imageUnavailable || !imageInput) { setToast(imageUnavailable); return; }
+      try { validateImageInput(image.dataUrl, imageInput); }
+      catch (error) { setToast(error instanceof Error ? error.message : "The image attachment is invalid."); return; }
+    }
+    const history = retryIndex < 0 ? messages : messages.slice(0, retryIndex);
+    const id = activeId ?? uid(); const responseId = uid(); const userId = uid();
+    const pending: Message[] = [...history, { id: userId, role: "user", content: text, imageName: image?.name }, { id: responseId, role: "assistant", content: "", model: selectedModel, useAdapter }];
     const candidates = [...completedHistory(history), { role: "user", content: text }];
     let input;
-    try { input = fitMessages(candidates, effectiveSettings, temperature, selectedModel, useAdapter); }
+    try { input = fitMessages(candidates, effectiveSettings, temperature, selectedModel, useAdapter, image?.dataUrl); }
     catch (error) { setToast(error instanceof Error ? error.message : "Message exceeds your configured limits."); return; }
     const captureDiagnostic = diagnosticsEnabled[selectedModel] && connection.diagnosticsAvailable === true;
     if (captureDiagnostic) setDiagnosticRecords(records => [...records.slice(-99), {
@@ -157,16 +227,28 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       browserTimings: { firstContentMs: null, firstRenderMs: null, completionMs: null, elapsedMs: null },
     }]);
     const locallyTrimmed = input.length < completedHistory(history).length + 1;
+    if (retryId) sentImages.current.delete(retryId);
+    if (image) {
+      sentImages.current.set(userId, { chatId: id, attachment: image });
+      if (sentImages.current.size > 32) {
+        const oldest = sentImages.current.keys().next();
+        if (!oldest.done) sentImages.current.delete(oldest.value);
+      }
+    }
     setChats(prev => [{ id, model: selectedModel, useAdapter: useAdapter ?? active?.useAdapter, title: active?.title ?? text.slice(0, 48), updatedAt: Date.now(), messages: pending }, ...prev.filter(c => c.id !== id)]);
-    setActiveId(id); setDraft(""); setSidebar(false); follow.current = true;
+    setActiveId(id); clearDraft(); setSidebar(false); follow.current = true;
     const abort = new AbortController(); controller.current = abort; setBusy(id);
     let responseStarted = false;
     let contentReceived = false;
     try {
-      const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json", ...(captureDiagnostic ? { [DIAGNOSTICS_HEADER]: "1" } : {}) }, body: JSON.stringify({ model: selectedModel, useAdapter, messages: input, max_tokens: effectiveSettings.outputTokens, temperature, settings: effectiveSettings }), signal: abort.signal });
+      const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json", ...(captureDiagnostic ? { [DIAGNOSTICS_HEADER]: "1" } : {}) }, body: JSON.stringify({ model: selectedModel, useAdapter, messages: input, max_tokens: effectiveSettings.outputTokens, temperature, settings: effectiveSettings, image: image?.dataUrl }), signal: abort.signal });
       const gateway = captureDiagnostic ? parseDiagnosticHeader(response.headers.get(DIAGNOSTICS_HEADER)) : null;
       if (captureDiagnostic) patchDiagnostic(responseId, { gateway });
       if (!response.ok || !response.body) { if (response.status === 401) setAuthenticated(false); throw new Error((await response.json()).error ?? "Couldn't start a reply."); }
+      if (image && response.headers.get(IMAGE_ACCEPTED_HEADER) !== "true") {
+        await response.body.cancel().catch(() => {});
+        throw new Error("The model did not confirm receipt of the attached image. Try again when image input is available.");
+      }
       responseStarted = true;
       if (captureDiagnostic) patchDiagnostic(responseId, { status: "streaming" });
       const trimmed = Number(response.headers.get("X-Context-Trimmed") ?? 0);
@@ -193,10 +275,30 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       controller.current = null; setBusy(null); textarea.current?.focus();
     }
   }
-  function retry() { const index = messages.findLastIndex(m => m.role === "user"); if (index >= 0) void send(messages[index].content, messages.slice(0, index)); }
+  function retry() {
+    const message = messages.findLast(m => m.role === "user");
+    if (!message) return;
+    if (attachment || readingImage || retryImageId) { setToast("Finish or clear the current image draft before retrying."); return; }
+    const image = sentImages.current.get(message.id)?.attachment;
+    if (message.imageName && !image) {
+      setDraft(message.content); setRetryImageId(message.id); textarea.current?.focus();
+      return;
+    }
+    void send(message.content, message.id, image ?? null);
+  }
+  function deleteConversation() {
+    if (busy === deleting) controller.current?.abort();
+    setChats(prev => prev.filter(c => c.id !== deleting));
+    for (const [messageId, image] of sentImages.current) {
+      if (image.chatId === deleting) sentImages.current.delete(messageId);
+    }
+    savedDrafts.current.delete(deleting);
+    if (activeId === deleting) { setActiveId(null); clearDraft(); }
+    setDeleting(null);
+  }
   async function logout() {
     controller.current?.abort();
-    try { const res = await fetch("/api/logout", { method: "POST" }); if (!res.ok) throw new Error(); setAuthenticated(false); setSettings(false); setLoaded(false); setChats([]); setDiagnosticRecords([]); setDiagnosticsEnabled({ "4bit": false, bf16: false }); setActiveId(null); }
+    try { const res = await fetch("/api/logout", { method: "POST" }); if (!res.ok) throw new Error(); clearDraft(); sentImages.current.clear(); savedDrafts.current.clear(); setAuthenticated(false); setSettings(false); setLoaded(false); setChats([]); setDiagnosticRecords([]); setDiagnosticsEnabled({ "4bit": false, bf16: false }); setActiveId(null); }
     catch { setToast("Couldn't sign out. Please try again."); }
   }
   function trapFocus(event: React.KeyboardEvent) {
@@ -223,7 +325,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       <button className="new-chat" onClick={newChat}><Plus size={17}/> New conversation <span>↗</span></button>
       <div className="search-chats"><Search size={15}/><input ref={searchInput} aria-label="Search conversations" placeholder="Search conversations" value={search} onChange={e => setSearch(e.target.value)}/><kbd>⌘ K</kbd></div>
       <div className="history-heading">YOUR CONVERSATIONS<span>{chats.length.toString().padStart(2, "0")}</span></div>
-      <div className="history-list">{chats.filter(c => c.title.toLowerCase().includes(search.toLowerCase())).map(chat => <div className={`history-item ${chat.id === activeId ? "active" : ""}`} key={chat.id}><button className="history-link" onClick={() => { setActiveId(chat.id); setDraft(""); setSidebar(false); follow.current = true; }}><MessageSquare size={15}/><span>{chat.title}</span></button><button className="delete-chat" aria-label={`Delete ${chat.title}`} onClick={() => setDeleting(chat.id)}><Trash2 size={14}/></button></div>)}{!chats.length && <div className="empty-history"><MessageSquare size={23} strokeWidth={1.3}/><p>Good conversations<br/>start with a little curiosity.</p><span>Your chats will appear here.</span></div>}{chats.length > 0 && !chats.some(c => c.title.toLowerCase().includes(search.toLowerCase())) && <p className="no-results">No conversations found.</p>}</div>
+      <div className="history-list">{chats.filter(c => c.title.toLowerCase().includes(search.toLowerCase())).map(chat => <div className={`history-item ${chat.id === activeId ? "active" : ""}`} key={chat.id}><button className="history-link" onClick={() => switchConversation(chat.id)}><MessageSquare size={15}/><span>{chat.title}</span></button><button className="delete-chat" aria-label={`Delete ${chat.title}`} onClick={() => setDeleting(chat.id)}><Trash2 size={14}/></button></div>)}{!chats.length && <div className="empty-history"><MessageSquare size={23} strokeWidth={1.3}/><p>Good conversations<br/>start with a little curiosity.</p><span>Your chats will appear here.</span></div>}{chats.length > 0 && !chats.some(c => c.title.toLowerCase().includes(search.toLowerCase())) && <p className="no-results">No conversations found.</p>}</div>
       <div className="sidebar-bottom"><div className="private-note"><ShieldCheck size={15}/><span>Saved only in this browser</span></div><button className="profile-button" onClick={() => setSettings(true)}><span className="avatar">Z</span><span><strong>Your workspace</strong><small>Personal account</small></span><Settings2 size={17}/></button></div>
     </aside>
     <div className="main-shell">
@@ -231,18 +333,85 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       {adapterAvailable && <div className="adapter-controls"><label className="adapter-toggle"><input type="checkbox" role="switch" aria-label="Use trained adapter" checked={selectedAdapter} disabled={!!busy || !connection.ready} onChange={event => selectAdapter(event.target.checked)}/><span>Use trained adapter</span><strong>{selectedAdapter ? "On" : "Off"}</strong></label><span>{selectedAdapter ? "BF16 + adapter" : "BF16 base"}</span></div>}
       <main className={`chat-main ${messages.length ? "has-messages" : ""}`} ref={scroller} onScroll={() => { const el = scroller.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>
         {!messages.length ? <div className="welcome"><div className="welcome-mark" aria-hidden="true"><span>✳</span><i/></div><div className="eyebrow">A FRESH CONVERSATION</div><h1>A little curiosity.<br/><em>A lot of possibility.</em></h1><p>Your space to think, write, and work things out.</p><div className="starter-grid">{starters.map(card => <button className="starter-card" key={card.label} onClick={() => { setDraft(card.text); textarea.current?.focus(); }}><div><card.icon size={20} strokeWidth={1.45}/><ArrowUpRight size={16}/></div><strong>{card.label}</strong><small>{card.caption}</small></button>)}</div></div>
-        : <div className="message-list">{messages.map((message, index) => <article className={`message ${message.role}`} key={message.id}><div className="message-avatar">{message.role === "assistant" ? logo : "Z"}</div><div className="message-body"><div className="message-author">{message.role === "user" ? "You" : answerModelLabel(message.model ?? DEFAULT_MODEL, message.useAdapter)}{message.role === "assistant" && <span>ASSISTANT</span>}</div>{message.content ? message.role === "user" ? <p className="user-content">{message.content}</p> : <AnswerPaint messageId={message.id} onPaint={diagnosticsById.get(message.id)?.browserTimings?.firstRenderMs === null ? markFirstRender : undefined}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: ({ children }) => <CodeBlock>{children}</CodeBlock>, a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> }}>{message.content}</ReactMarkdown></AnswerPaint> : busy === activeId && index === messages.length - 1 ? <div className="thinking" aria-label="Qwen is thinking"><span/><span/><span/></div> : null}{diagnosticsById.has(message.id) && <RequestDiagnostics record={diagnosticsById.get(message.id)!}/>} {message.note && <div className={`message-note ${message.state === "error" ? "error" : ""}`} role={message.state === "error" ? "alert" : undefined}>{message.note}</div>}{message.role === "assistant" && busy !== activeId && <div className="message-actions">{message.content && <CopyButton text={message.content}/>} {index === messages.length - 1 && <button onClick={retry} disabled={!!busy}><RotateCcw size={14}/><span>Try again</span></button>}{message.state === "stopped" && <span>Stopped</span>}</div>}</div></article>)}<div ref={bottom}/></div>}
+        : <div className="message-list">
+          {messages.map((message, index) => <article className={`message ${message.role}`} key={message.id}>
+            <div className="message-avatar">{message.role === "assistant" ? logo : "Z"}</div>
+            <div className="message-body">
+              <div className="message-author">{message.role === "user" ? "You" : answerModelLabel(message.model ?? DEFAULT_MODEL, message.useAdapter)}{message.role === "assistant" && <span>ASSISTANT</span>}</div>
+              {message.role === "user" && message.imageName && <MessageAttachment name={message.imageName} attachment={sentImages.current.get(message.id)?.attachment}/>}
+              {message.content ? message.role === "user" ? <p className="user-content">{message.content}</p> : <AnswerPaint messageId={message.id} onPaint={diagnosticsById.get(message.id)?.browserTimings?.firstRenderMs === null ? markFirstRender : undefined}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: ({ children }) => <CodeBlock>{children}</CodeBlock>, a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> }}>{message.content}</ReactMarkdown></AnswerPaint>
+                : busy === activeId && index === messages.length - 1 ? <div className="thinking" aria-label="Qwen is thinking"><span/><span/><span/></div> : null}
+              {diagnosticsById.has(message.id) && <RequestDiagnostics record={diagnosticsById.get(message.id)!}/>}
+              {message.note && <div className={`message-note ${message.state === "error" ? "error" : ""}`} role={message.state === "error" ? "alert" : undefined}>{message.note}</div>}
+              {message.role === "assistant" && busy !== activeId && <div className="message-actions">
+                {message.content && <CopyButton text={message.content}/>}
+                {index === messages.length - 1 && <button onClick={retry} disabled={!!busy}><RotateCcw size={14}/><span>Try again</span></button>}
+                {message.state === "stopped" && <span>Stopped</span>}
+              </div>}
+            </div>
+          </article>)}
+          <div ref={bottom}/>
+        </div>}
       </main>
-      <div className="composer-region"><div className="composer-wrap">{preview && <div className="preview-note"><Sparkles size={13}/> Local preview · sample replies, no model requests</div>}{connection.mode === "live" && !connection.ready && <div className="offline-note">Your model may be stopped or loading. You can try again when it’s ready.</div>}<form className="composer" onSubmit={e => { e.preventDefault(); void send(); }}><label className="sr-only" htmlFor="message">Message Qwen</label><textarea ref={textarea} id="message" placeholder="What’s on your mind?" value={draft} onChange={e => setDraft(e.target.value)} maxLength={effectiveSettings.inputCharacters} rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}/><div className="composer-bottom"><span className="composer-model">{logo} {selectedLabel}</span><div className="composer-controls"><span className="enter-hint">Shift + Enter for a new line</span>{busy ? <button type="button" className="send-button stop-button" aria-label="Stop generation" onClick={() => controller.current?.abort()}><Square size={15} fill="currentColor"/></button> : <button className="send-button" aria-label="Send message" disabled={!draft.trim()}><ArrowUp size={20}/></button>}</div></div></form><p className="composer-footer">A helpful second perspective. Always give important details a second look.</p></div></div>
+      <div className="composer-region"><div className="composer-wrap">
+        {preview && <div className="preview-note"><Sparkles size={13}/> Local preview · sample replies, no model requests</div>}
+        {connection.mode === "live" && !connection.ready && <div className="offline-note">Your model may be stopped or loading. You can try again when it’s ready.</div>}
+        <form className="composer" onSubmit={e => { e.preventDefault(); void send(); }}>
+          {attachment && <div className="composer-attachment">
+            <img src={attachment.dataUrl} alt="Image preview"/>
+            <span title={attachment.name}>{attachment.name}</span>
+            <button type="button" aria-label="Remove image" onClick={() => { removeAttachment(); textarea.current?.focus(); }}><X size={16} aria-hidden="true"/></button>
+          </div>}
+          <label className="sr-only" htmlFor="message">Message Qwen</label>
+          <textarea ref={textarea} id="message" placeholder="What’s on your mind?" value={draft} onChange={e => setDraft(e.target.value)}
+            maxLength={effectiveSettings.inputCharacters} rows={1} onKeyDown={e => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                if (!e.repeat) void send();
+              }
+            }}/>
+          <input ref={fileInput} type="file" aria-label="Choose image file" accept={imageInput?.mimeTypes.join(",") ?? "image/jpeg,image/png,image/webp"}
+            hidden disabled={!!imageUnavailable || !!busy || readingImage} onChange={e => {
+              const file = e.currentTarget.files?.[0];
+              e.currentTarget.value = "";
+              if (file) void chooseImage(file);
+            }}/>
+          <div className="composer-bottom">
+            <span className="composer-model">{logo} {selectedLabel}</span>
+            <div className="composer-controls">
+              <span className="enter-hint">Shift + Enter for a new line</span>
+              <button type="button" className="attach-image-button" aria-label="Attach image" aria-describedby="image-input-help"
+                disabled={!!imageUnavailable || !!busy || readingImage} onClick={() => fileInput.current?.click()}>
+                <ImagePlus size={17} aria-hidden="true"/>
+              </button>
+              {busy ? <button type="button" className="send-button stop-button" aria-label="Stop generation" onClick={() => controller.current?.abort()}><Square size={15} fill="currentColor"/></button>
+                : <button className="send-button" aria-label="Send message" disabled={!draft.trim() || readingImage || (!!attachment && !!imageUnavailable) || (!!retryImageId && !attachment)}><ArrowUp size={20}/></button>}
+            </div>
+          </div>
+          <div className="composer-attachment-note" id="image-input-help" aria-live="polite">
+            {readingImage ? "Preparing image…" : retryImageId && !attachment ? "Reattach the original image to retry this message." : imageUnavailable}
+            {retryImageId && !attachment && imageUnavailable && <span> {imageUnavailable}</span>}
+            {retryImageId && <button type="button" onClick={clearDraft}>Cancel retry</button>}
+          </div>
+        </form>
+        <p className="composer-footer">A helpful second perspective. Always give important details a second look.</p>
+      </div></div>
     </div>
     {toast && <div className="toast" role="status">{toast}<button onClick={() => setToast("")} aria-label="Dismiss notification"><X size={14}/></button></div>}
-    {(settings || deleting) && <div className="modal-backdrop" onClick={() => { setSettings(false); setDeleting(null); }}><div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" ref={dialog} onKeyDown={trapFocus} onClick={e => e.stopPropagation()}><button className="icon-button close-dialog" onClick={() => { setSettings(false); setDeleting(null); }} aria-label="Close dialog"><X size={20}/></button>{deleting ? <><div className="eyebrow">MAKE A LITTLE ROOM</div><h2 id="dialog-title">Delete this conversation?</h2><p>This removes the conversation from this browser. It can’t be undone.</p><div className="dialog-buttons"><button className="secondary-button" onClick={() => setDeleting(null)}>Keep conversation</button><button className="danger-button" onClick={() => { if (busy === deleting) controller.current?.abort(); setChats(prev => prev.filter(c => c.id !== deleting)); if (activeId === deleting) setActiveId(null); setDeleting(null); }}>Delete conversation</button></div></> : <><div className="eyebrow">MAKE YOURSELF AT HOME</div><h2 id="dialog-title">Your workspace</h2><ModelSettingsPanel connections={connections} preferences={preferences} busy={!!busy}
+    {(settings || deleting) && <div className="modal-backdrop" onClick={() => { setSettings(false); setDeleting(null); }}><div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" ref={dialog} onKeyDown={trapFocus} onClick={e => e.stopPropagation()}><button className="icon-button close-dialog" onClick={() => { setSettings(false); setDeleting(null); }} aria-label="Close dialog"><X size={20}/></button>{deleting ? <><div className="eyebrow">MAKE A LITTLE ROOM</div><h2 id="dialog-title">Delete this conversation?</h2><p>This removes the conversation from this browser. It can’t be undone.</p><div className="dialog-buttons"><button className="secondary-button" onClick={() => setDeleting(null)}>Keep conversation</button><button className="danger-button" onClick={deleteConversation}>Delete conversation</button></div></> : <><div className="eyebrow">MAKE YOURSELF AT HOME</div><h2 id="dialog-title">Your workspace</h2><ModelSettingsPanel connections={connections} preferences={preferences} busy={!!busy}
       temperature={temperature} onTemperatureChange={setTemperature}
       diagnosticsEnabled={diagnosticsEnabled} onDiagnosticsChange={(model, enabled) => setDiagnosticsEnabled(previous => ({ ...previous, [model]: enabled }))}
       onRefresh={() => { void statusRequests.current?.refresh(); }}
       onApply={(model, next) => { setPreferences(previous => ({ ...previous, [model]: next })); setToast(`${modelInfo(model).label} settings saved.`); }}/>
       {diagnosticRecords.length > 0 && <div className="diagnostic-session"><p className="settings-help">{diagnosticRecords.length} diagnostic records in this session (latest 100). Reloading or signing out clears them.</p><button type="button" className="secondary-button" onClick={() => exportDiagnostics(diagnosticRecords)}>Export session CSV</button></div>}<p className="settings-footnote">Chats stay in this browser. In live mode, messages you send are processed by your model. Older messages may be omitted to fit its context.</p><button className="signout-button" onClick={logout}><LogOut size={16}/> Sign out</button></>}</div></div>}
   </div>;
+}
+
+function MessageAttachment({ name, attachment }: { name: string; attachment?: ImageAttachment }) {
+  return <figure className="message-attachment">
+    {attachment && <img src={attachment.dataUrl} alt="Attached image"/>}
+    <figcaption><ImagePlus size={14} aria-hidden="true"/><span>{name}</span></figcaption>
+  </figure>;
 }
 
 function CopyButton({ text }: { text: string }) {

@@ -145,6 +145,12 @@ No database, paid chat provider, or OpenAI account is required. The app is confi
 - Live readiness checks and clear offline, loading, interrupted, and context-limit messages.
 - Conversations are stored in this browser's local storage, not synced between devices or encrypted by the app. In live mode the selected conversation history is sent through the Vercel server and Runpod gateway to your model. The app and gateway do not log prompts or replies; hosting platforms may retain operational metadata.
 
+## Ask about an image
+
+Select **Qwen3.8-27B-bf16** and use **Attach image** to add one JPEG, PNG, or WebP to a text prompt. If **Use trained adapter** is available, switch it off to use the BF16 base model for the image request. Qwen streams a text reply through the same chat connection.
+
+The attachment control is available when the connected BF16 gateway advertises image input. The uploaded image shares the request byte budget with the text. The app keeps recent image bytes in the open tab for retry, and the saved conversation retains an attachment marker. Reattach the file to retry after a reload or to ask another question about the same image.
+
 ## Live model connection
 
 The configured flow is:
@@ -204,6 +210,8 @@ node scripts/integration.mjs
 ```
 
 The integration check requires Docker and the sibling inference project. It creates a disposable local gateway container and a separate Next.js process on port 3002, tests real HTTP streaming and cancellation, then removes both. The model in that check is a controlled fixture, not the live GPU model.
+
+For the image attachment check, set `CHAT_TEST_IMAGE_INPUT=true` and `CHAT_TEST_FIXTURE_PYTHON` to a local Python interpreter with FastAPI, HTTPX, Uvicorn, and Pillow installed. `CHAT_TEST_FIXTURE_ROOT` can point to an inference worktree with image input support. Set `CHAT_TEST_PLAYWRIGHT` to the path of an installed Playwright `index.mjs` to also exercise the browser composer.
 
 From `../llm-inference-server`, build the local image and run the Python checks without a GPU:
 
