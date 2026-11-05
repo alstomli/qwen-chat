@@ -70,3 +70,140 @@
 .model-settings-section > summary span { color: #67715e; font-size: 11px; }
 .model-settings-section > .advanced-settings { margin: 0; padding: 16px; }
 @media (max-width: 520px) { .model-status-grid { grid-template-columns: 1fr; } .model-settings-section > summary span { display: block; margin-top: 6px; } }
+
+.composer-modes {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  width: fit-content;
+  max-width: 100%;
+  margin-bottom: 12px;
+  padding: 3px;
+  border: 1px solid #dce2d2;
+  border-radius: 9px;
+  background: #f3f5ee;
+}
+.composer-modes button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 11px;
+  border-radius: 6px;
+  color: var(--olive-dark);
+  font-size: 12px;
+  font-weight: 600;
+}
+.composer-modes button:hover { background: #e5eadc; }
+.composer-modes button[aria-pressed="true"] {
+  background: var(--olive);
+  color: #fff;
+}
+.composer-modes button:focus-visible,
+.image-job-actions :is(a, button):focus-visible { outline-offset: 2px; }
+.composer-image-size {
+  color: var(--olive-dark);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.image-job {
+  max-width: 420px;
+  padding: 14px;
+  border: 1px solid #dce2d2;
+  border-radius: 12px;
+  background: #fffefa;
+}
+.image-job-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.image-job-heading .message-author { margin: 0; font-size: 12px; }
+.image-job-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 20px;
+  background: #edf1e5;
+  color: var(--olive-dark);
+  font-size: 11px;
+  font-weight: 600;
+}
+.image-job[data-state="error"] .image-job-status {
+  background: #f8ede5;
+  color: #894b34;
+}
+.image-job-prompt {
+  margin: 10px 0 12px;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.image-job-visual {
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f1f3ea;
+}
+.image-job-visual img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.image-job-placeholder {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: #6c7c5b;
+}
+.image-job-error {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #eddacb;
+  border-radius: 7px;
+  background: #faf0e7;
+  color: #894b34;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.image-job-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.image-job-actions :is(a, button) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid #d6decb;
+  border-radius: 7px;
+  color: var(--olive-dark);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.image-job-actions a { background: #edf1e5; }
+.image-job-actions :is(a, button:not(:disabled)):hover { background: #e4ead9; }
+.image-job-actions button:disabled { opacity: .55; }
+
+@media (max-width: 760px), (pointer: coarse) {
+  .composer-modes button,
+  .image-job-actions :is(a, button) { min-height: 44px; }
+  .composer:has(.composer-modes) .send-button { width: 44px; height: 44px; }
+}
+@media (max-width: 380px) {
+  .image-job { padding: 11px; }
+}

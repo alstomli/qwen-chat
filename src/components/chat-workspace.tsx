@@ -1,15 +1,17 @@
 "use client";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { ArrowUp, ArrowUpRight, Check, ChevronDown, Code2, Compass, Copy, Feather, LoaderCircle, LogOut, Menu, MessageSquare, PanelLeftClose, Plus, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, X, RotateCcw } from "lucide-react";
+import { ArrowUp, ArrowUpRight, Check, ChevronDown, Code2, Compass, Copy, Feather, ImagePlus, LoaderCircle, LogOut, Menu, MessageSquare, PanelLeftClose, Plus, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, X, RotateCcw } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { RequestDiagnostics, exportDiagnostics } from "@/components/request-diagnostics";
 import { DIAGNOSTICS_HEADER, parseDiagnosticHeader, type BrowserTimings, type DiagnosticRecord } from "@/lib/diagnostics";
 import { AnswerPaint } from "@/components/answer-paint";
+import { ImageJobCard } from "@/components/image-job-card";
 import { ModelSettingsPanel } from "@/components/model-settings-panel";
 import { DEFAULT_SETTINGS, SETTINGS_MAX, SETTINGS_KEY, MODEL_SETTINGS_KEY, parseModelSettings, fitSettings, fitMessages, jsonBytes, type ModelSettings } from "@/lib/chat-settings";
 import { consumeCompletion } from "@/lib/protocol";
-import { completedHistory, parseConversations, STORAGE_KEY, type Conversation, type Message } from "@/lib/storage";
+import { completedHistory, parseConversations, serializeConversations, STORAGE_KEY, type Conversation, type ImageMessage, type TextMessage } from "@/lib/storage";
+import { useImageJobs } from "@/lib/use-image-jobs";
 
 import { DEFAULT_MODEL, MODELS, modelInfo, answerModelLabel, type ModelId } from "@/lib/models";
 import { allModelStatusRequests, initialModelConnections, updateModelConnection } from "@/lib/model-status";
@@ -26,6 +28,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   const [password, setPassword] = useState(""); const [loginError, setLoginError] = useState(""); const [signingIn, setSigningIn] = useState(false);
   const [chats, setChats] = useState<Conversation[]>([]); const [loaded, setLoaded] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null); const [draft, setDraft] = useState(""); const [search, setSearch] = useState("");
+  const [composerMode, setComposerMode] = useState<"chat" | "image">("chat");
   const [sidebar, setSidebar] = useState(false); const [settings, setSettings] = useState(false); const [deleting, setDeleting] = useState<string | null>(null);
   const [connections, setConnections] = useState(initialModelConnections);
   const statusRequests = useRef<ReturnType<typeof allModelStatusRequests> | null>(null);
@@ -47,7 +50,17 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       ? { ...record, browserTimings: { ...record.browserTimings, firstRenderMs: observed - record.browserStartedAt } } : record));
   }, []);
   const controller = useRef<AbortController | null>(null); const textarea = useRef<HTMLTextAreaElement>(null); const searchInput = useRef<HTMLInputElement>(null); const bottom = useRef<HTMLDivElement>(null); const scroller = useRef<HTMLDivElement>(null); const follow = useRef(true); const dialog = useRef<HTMLDivElement>(null);
+  const requireLogin = useCallback(() => {
+    controller.current?.abort();
+    setLoaded(false);
+    setAuthenticated(false);
+    setComposerMode("chat");
+  }, []);
+  const { capability, track, resume, deleteImages } = useImageJobs(authenticated, setChats, requireLogin);
+  const imageEnabled = capability?.enabled === true;
+  const imageMode = imageEnabled && composerMode === "image";
   const active = chats.find(c => c.id === activeId); const messages = active?.messages ?? [];
+  const lastTextId = messages.findLast(message => message.role !== "image")?.id;
   const selectedModel = active?.model ?? draftModel;
   const connection = connections[selectedModel];
   const selectedAdapter = active ? active.useAdapter ?? true : draftAdapter;
@@ -59,7 +72,11 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
 
   useEffect(() => {
     if (!authenticated) return;
-    try { const stored = parseConversations(localStorage.getItem(STORAGE_KEY)); setChats(stored); setActiveId(stored[0]?.id ?? null); setDiagnosticRecords([]); setDiagnosticsEnabled({ "4bit": false, bf16: false }); }
+    try {
+      const stored = parseConversations(localStorage.getItem(STORAGE_KEY));
+      setChats(stored); setActiveId(stored[0]?.id ?? null); setDiagnosticRecords([]); setDiagnosticsEnabled({ "4bit": false, bf16: false });
+      resume(stored);
+    }
     catch { setToast("Your browser couldn't load saved conversations."); }
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
@@ -68,10 +85,10 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       if (typeof temperature === "number" && Number.isFinite(temperature) && temperature >= 0 && temperature <= 1.5) setTemperature(temperature);
     } catch { setToast("Your browser couldn't load saved settings."); }
     setLoaded(true);
-  }, [authenticated]);
+  }, [authenticated, resume]);
   useEffect(() => {
     if (!loaded || !authenticated) return;
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(chats)); }
+    try { localStorage.setItem(STORAGE_KEY, serializeConversations(chats)); }
     catch { setToast("Browser storage is full. This conversation will only be available in this tab."); }
   }, [chats, loaded, authenticated]);
   useEffect(() => {
@@ -82,13 +99,13 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   useEffect(() => {
     if (!authenticated || !loaded) return;
     setConnections(initialModelConnections());
-    const requests = allModelStatusRequests(status => setConnections(current => updateModelConnection(current, status)), () => setAuthenticated(false));
+    const requests = allModelStatusRequests(status => setConnections(current => updateModelConnection(current, status)), requireLogin);
     statusRequests.current = requests;
     void requests.refresh(); const timer = setInterval(() => { void requests.refresh(); }, 30_000);
     return () => { requests.dispose(); clearInterval(timer); if (statusRequests.current === requests) statusRequests.current = null; };
-  }, [authenticated, loaded]);
+  }, [authenticated, loaded, requireLogin]);
   useEffect(() => { if (settings) void statusRequests.current?.refresh(); }, [settings]);
-  useEffect(() => { if (follow.current) bottom.current?.scrollIntoView({ behavior: busy ? "instant" : "smooth" }); }, [chats, busy]);
+  useEffect(() => { if (follow.current) bottom.current?.scrollIntoView({ behavior: busy ? "instant" : "smooth" }); }, [chats, busy, activeId]);
   useEffect(() => { if (textarea.current) { textarea.current.style.height = "auto"; textarea.current.style.height = Math.min(textarea.current.scrollHeight, 160) + "px"; } }, [draft]);
   useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(""), 6000); return () => clearTimeout(timer); }, [toast]);
   useEffect(() => {
@@ -115,7 +132,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     } catch (error) { setLoginError(error instanceof Error ? error.message : "Couldn't sign in. Try again."); }
     finally { setSigningIn(false); }
   }
-  function newChat() { controller.current?.abort(); setDraftModel(selectedModel); setDraftAdapter(true); setActiveId(null); setDraft(""); setSidebar(false); follow.current = true; textarea.current?.focus(); }
+  function newChat() { controller.current?.abort(); setDraftModel(selectedModel); setDraftAdapter(true); setActiveId(null); setDraft(""); setComposerMode("chat"); setSidebar(false); follow.current = true; textarea.current?.focus(); }
   function selectAdapter(useAdapter: boolean) {
     if (controller.current || busy || !adapterAvailable) return;
     if (activeId) setChats(previous => previous.map(chat => chat.id === activeId ? { ...chat, useAdapter } : chat));
@@ -127,10 +144,10 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     else setDraftModel(model);
     void statusRequests.current?.refresh();
   }
-  function updateMessage(chatId: string, messageId: string, patch: Partial<Message> | ((m: Message) => Partial<Message>)) {
-    setChats(prev => prev.map(chat => chat.id !== chatId ? chat : { ...chat, messages: chat.messages.map(m => m.id === messageId ? { ...m, ...(typeof patch === "function" ? patch(m) : patch) } : m) }));
+  function updateMessage(chatId: string, messageId: string, patch: Partial<TextMessage> | ((m: TextMessage) => Partial<TextMessage>)) {
+    setChats(prev => prev.map(chat => chat.id !== chatId ? chat : { ...chat, messages: chat.messages.map(m => m.role !== "image" && m.id === messageId ? { ...m, ...(typeof patch === "function" ? patch(m) : patch) } : m) }));
   }
-  async function send(text = draft, history = messages) {
+  async function send(text = draft, retryId?: string) {
     const submitted = performance.now();
     text = text.trim(); if (!text || controller.current) return;
     if (chats.length >= 100 && !activeId) { setToast("You have 100 saved chats. Delete one before starting another."); return; }
@@ -139,7 +156,9 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     const useAdapter = adapterAvailable ? selectedAdapter : undefined;
     if (text.length > effectiveSettings.inputCharacters) { setToast(`Please shorten your message to ${effectiveSettings.inputCharacters.toLocaleString()} characters or fewer.`); return; }
     const id = activeId ?? uid(); const responseId = uid();
-    const pending: Message[] = [...history, { id: uid(), role: "user", content: text }, { id: responseId, role: "assistant", content: "", model: selectedModel, useAdapter }];
+    const retryIndex = retryId ? messages.findIndex(message => message.id === retryId) : -1;
+    const history = retryIndex < 0 ? messages : messages.slice(0, retryIndex);
+    const pending: TextMessage[] = [{ id: uid(), role: "user", content: text }, { id: responseId, role: "assistant", content: "", model: selectedModel, useAdapter }];
     const candidates = [...completedHistory(history), { role: "user", content: text }];
     let input;
     try { input = fitMessages(candidates, effectiveSettings, temperature, selectedModel, useAdapter); }
@@ -157,8 +176,15 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       browserTimings: { firstContentMs: null, firstRenderMs: null, completionMs: null, elapsedMs: null },
     }]);
     const locallyTrimmed = input.length < completedHistory(history).length + 1;
-    setChats(prev => [{ id, model: selectedModel, useAdapter: useAdapter ?? active?.useAdapter, title: active?.title ?? text.slice(0, 48), updatedAt: Date.now(), messages: pending }, ...prev.filter(c => c.id !== id)]);
-    setActiveId(id); setDraft(""); setSidebar(false); follow.current = true;
+    setChats(prev => {
+      const chat = prev.find(conversation => conversation.id === id);
+      const timeline = chat?.messages ?? [];
+      const index = retryId ? timeline.findIndex(message => message.id === retryId) : -1;
+      const messages = index < 0 ? [...timeline, ...pending]
+        : [...timeline.slice(0, index), ...pending, ...timeline.slice(index + 1).filter(message => message.role === "image")];
+      return [{ id, model: selectedModel, useAdapter: useAdapter ?? chat?.useAdapter, title: chat?.title ?? text.slice(0, 48), updatedAt: Date.now(), messages }, ...prev.filter(c => c.id !== id)];
+    });
+    setActiveId(id); if (!retryId || !imageMode) setDraft(""); setSidebar(false); follow.current = true;
     const abort = new AbortController(); controller.current = abort; setBusy(id);
     let responseStarted = false;
     let contentReceived = false;
@@ -166,7 +192,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json", ...(captureDiagnostic ? { [DIAGNOSTICS_HEADER]: "1" } : {}) }, body: JSON.stringify({ model: selectedModel, useAdapter, messages: input, max_tokens: effectiveSettings.outputTokens, temperature, settings: effectiveSettings }), signal: abort.signal });
       const gateway = captureDiagnostic ? parseDiagnosticHeader(response.headers.get(DIAGNOSTICS_HEADER)) : null;
       if (captureDiagnostic) patchDiagnostic(responseId, { gateway });
-      if (!response.ok || !response.body) { if (response.status === 401) setAuthenticated(false); throw new Error((await response.json()).error ?? "Couldn't start a reply."); }
+      if (!response.ok || !response.body) { if (response.status === 401) requireLogin(); throw new Error((await response.json()).error ?? "Couldn't start a reply."); }
       responseStarted = true;
       if (captureDiagnostic) patchDiagnostic(responseId, { status: "streaming" });
       const trimmed = Number(response.headers.get("X-Context-Trimmed") ?? 0);
@@ -193,10 +219,43 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       controller.current = null; setBusy(null); textarea.current?.focus();
     }
   }
-  function retry() { const index = messages.findLastIndex(m => m.role === "user"); if (index >= 0) void send(messages[index].content, messages.slice(0, index)); }
+  function retry() {
+    const lastUser = messages.findLast(message => message.role === "user");
+    if (lastUser) void send(lastUser.content, lastUser.id);
+  }
+  function generateImage(text: string, fromComposer = false) {
+    const prompt = text.trim();
+    if (!capability?.enabled || !prompt) return;
+    if (prompt.length > capability.maxPromptLength) { setToast(`Please shorten your image prompt to ${capability.maxPromptLength.toLocaleString()} characters or fewer.`); return; }
+    if (chats.length >= 100 && !activeId) { setToast("You have 100 saved chats. Delete one before starting another."); return; }
+    const id = activeId ?? uid();
+    const message: ImageMessage = { id: uid(), role: "image", content: prompt, state: "queued" };
+    setChats(prev => {
+      const chat = prev.find(conversation => conversation.id === id);
+      return [{
+        id, model: chat?.model ?? selectedModel, useAdapter: chat?.useAdapter ?? (adapterAvailable ? selectedAdapter : undefined),
+        title: chat?.title ?? prompt.slice(0, 48), updatedAt: Date.now(), messages: [...(chat?.messages ?? []), message],
+      }, ...prev.filter(c => c.id !== id)];
+    });
+    setActiveId(id); if (fromComposer) setDraft(""); setSidebar(false); follow.current = true;
+    void track(id, message.id, { prompt });
+  }
+  function submitComposer() {
+    if (imageMode) generateImage(draft, true);
+    else void send();
+  }
+  function confirmDelete() {
+    const chat = chats.find(conversation => conversation.id === deleting);
+    if (!chat) return;
+    if (busy === chat.id) controller.current?.abort();
+    deleteImages(chat);
+    setChats(prev => prev.filter(conversation => conversation.id !== chat.id));
+    if (activeId === chat.id) setActiveId(null);
+    setDeleting(null);
+  }
   async function logout() {
     controller.current?.abort();
-    try { const res = await fetch("/api/logout", { method: "POST" }); if (!res.ok) throw new Error(); setAuthenticated(false); setSettings(false); setLoaded(false); setChats([]); setDiagnosticRecords([]); setDiagnosticsEnabled({ "4bit": false, bf16: false }); setActiveId(null); }
+    try { const res = await fetch("/api/logout", { method: "POST" }); if (!res.ok) throw new Error(); requireLogin(); setSettings(false); setChats([]); setDiagnosticRecords([]); setDiagnosticsEnabled({ "4bit": false, bf16: false }); setActiveId(null); }
     catch { setToast("Couldn't sign out. Please try again."); }
   }
   function trapFocus(event: React.KeyboardEvent) {
@@ -230,13 +289,69 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       <header className="workspace-header"><div className="workspace-heading"><button className="icon-button mobile-only" onClick={() => setSidebar(true)} aria-label="Open sidebar"><Menu size={20}/></button><span className="header-label">Personal workspace</span><span className="header-slash">/</span><label className="model-picker"><span className="sr-only">Model</span><select aria-label="Model" value={selectedModel} disabled={!!busy} onChange={e => selectModel(e.target.value as ModelId)}>{MODELS.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}</select><ChevronDown size={14} aria-hidden="true"/></label></div><button className={`connection-pill ${connection.mode === "live" && connection.ready ? "online" : preview ? "preview" : "offline"}`} onClick={() => setSettings(true)}><span/>{preview ? "Local preview" : connection.mode === "checking" ? "Connecting" : connection.mode === "unconfigured" ? "Setup needed" : connection.ready ? "Model online" : "Model offline"}<ArrowUpRight size={13}/></button></header>
       {adapterAvailable && <div className="adapter-controls"><label className="adapter-toggle"><input type="checkbox" role="switch" aria-label="Use trained adapter" checked={selectedAdapter} disabled={!!busy || !connection.ready} onChange={event => selectAdapter(event.target.checked)}/><span>Use trained adapter</span><strong>{selectedAdapter ? "On" : "Off"}</strong></label><span>{selectedAdapter ? "BF16 + adapter" : "BF16 base"}</span></div>}
       <main className={`chat-main ${messages.length ? "has-messages" : ""}`} ref={scroller} onScroll={() => { const el = scroller.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>
-        {!messages.length ? <div className="welcome"><div className="welcome-mark" aria-hidden="true"><span>✳</span><i/></div><div className="eyebrow">A FRESH CONVERSATION</div><h1>A little curiosity.<br/><em>A lot of possibility.</em></h1><p>Your space to think, write, and work things out.</p><div className="starter-grid">{starters.map(card => <button className="starter-card" key={card.label} onClick={() => { setDraft(card.text); textarea.current?.focus(); }}><div><card.icon size={20} strokeWidth={1.45}/><ArrowUpRight size={16}/></div><strong>{card.label}</strong><small>{card.caption}</small></button>)}</div></div>
-        : <div className="message-list">{messages.map((message, index) => <article className={`message ${message.role}`} key={message.id}><div className="message-avatar">{message.role === "assistant" ? logo : "Z"}</div><div className="message-body"><div className="message-author">{message.role === "user" ? "You" : answerModelLabel(message.model ?? DEFAULT_MODEL, message.useAdapter)}{message.role === "assistant" && <span>ASSISTANT</span>}</div>{message.content ? message.role === "user" ? <p className="user-content">{message.content}</p> : <AnswerPaint messageId={message.id} onPaint={diagnosticsById.get(message.id)?.browserTimings?.firstRenderMs === null ? markFirstRender : undefined}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: ({ children }) => <CodeBlock>{children}</CodeBlock>, a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> }}>{message.content}</ReactMarkdown></AnswerPaint> : busy === activeId && index === messages.length - 1 ? <div className="thinking" aria-label="Qwen is thinking"><span/><span/><span/></div> : null}{diagnosticsById.has(message.id) && <RequestDiagnostics record={diagnosticsById.get(message.id)!}/>} {message.note && <div className={`message-note ${message.state === "error" ? "error" : ""}`} role={message.state === "error" ? "alert" : undefined}>{message.note}</div>}{message.role === "assistant" && busy !== activeId && <div className="message-actions">{message.content && <CopyButton text={message.content}/>} {index === messages.length - 1 && <button onClick={retry} disabled={!!busy}><RotateCcw size={14}/><span>Try again</span></button>}{message.state === "stopped" && <span>Stopped</span>}</div>}</div></article>)}<div ref={bottom}/></div>}
+        {!messages.length ? <div className="welcome"><div className="welcome-mark" aria-hidden="true"><span>✳</span><i/></div><div className="eyebrow">A FRESH CONVERSATION</div><h1>A little curiosity.<br/><em>A lot of possibility.</em></h1><p>Your space to think, write, and work things out.</p><div className="starter-grid">{starters.map(card => <button className="starter-card" key={card.label} onClick={() => { setComposerMode("chat"); setDraft(card.text); textarea.current?.focus(); }}><div><card.icon size={20} strokeWidth={1.45}/><ArrowUpRight size={16}/></div><strong>{card.label}</strong><small>{card.caption}</small></button>)}</div></div>
+        : <div className="message-list">
+          {messages.map(message => {
+            if (message.role === "image") {
+              const jobId = message.state === "error" ? message.jobId : undefined;
+              return <ImageJobCard key={message.id} message={message} canRegenerate={imageEnabled}
+                onRegenerate={() => generateImage(message.content)}
+                onResume={jobId && activeId ? () => { void track(activeId, message.id, { jobId, state: "error" }); } : undefined}/>;
+            }
+            const lastText = message.id === lastTextId;
+            return <article className={`message ${message.role}`} key={message.id}>
+              <div className="message-avatar">{message.role === "assistant" ? logo : "Z"}</div>
+              <div className="message-body">
+                <div className="message-author">{message.role === "user" ? "You" : answerModelLabel(message.model ?? DEFAULT_MODEL, message.useAdapter)}{message.role === "assistant" && <span>ASSISTANT</span>}</div>
+                {message.content ? message.role === "user" ? <p className="user-content">{message.content}</p> : <AnswerPaint messageId={message.id} onPaint={diagnosticsById.get(message.id)?.browserTimings?.firstRenderMs === null ? markFirstRender : undefined}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: ({ children }) => <CodeBlock>{children}</CodeBlock>, a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> }}>{message.content}</ReactMarkdown></AnswerPaint>
+                  : busy === activeId && lastText ? <div className="thinking" aria-label="Qwen is thinking"><span/><span/><span/></div> : null}
+                {diagnosticsById.has(message.id) && <RequestDiagnostics record={diagnosticsById.get(message.id)!}/>}
+                {message.note && <div className={`message-note ${message.state === "error" ? "error" : ""}`} role={message.state === "error" ? "alert" : undefined}>{message.note}</div>}
+                {message.role === "assistant" && busy !== activeId && <div className="message-actions">
+                  {message.content && <CopyButton text={message.content}/>}
+                  {lastText && <button onClick={retry} disabled={!!busy}><RotateCcw size={14}/><span>Try again</span></button>}
+                  {message.state === "stopped" && <span>Stopped</span>}
+                </div>}
+              </div>
+            </article>;
+          })}
+          <div ref={bottom}/>
+        </div>}
       </main>
-      <div className="composer-region"><div className="composer-wrap">{preview && <div className="preview-note"><Sparkles size={13}/> Local preview · sample replies, no model requests</div>}{connection.mode === "live" && !connection.ready && <div className="offline-note">Your model may be stopped or loading. You can try again when it’s ready.</div>}<form className="composer" onSubmit={e => { e.preventDefault(); void send(); }}><label className="sr-only" htmlFor="message">Message Qwen</label><textarea ref={textarea} id="message" placeholder="What’s on your mind?" value={draft} onChange={e => setDraft(e.target.value)} maxLength={effectiveSettings.inputCharacters} rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}/><div className="composer-bottom"><span className="composer-model">{logo} {selectedLabel}</span><div className="composer-controls"><span className="enter-hint">Shift + Enter for a new line</span>{busy ? <button type="button" className="send-button stop-button" aria-label="Stop generation" onClick={() => controller.current?.abort()}><Square size={15} fill="currentColor"/></button> : <button className="send-button" aria-label="Send message" disabled={!draft.trim()}><ArrowUp size={20}/></button>}</div></div></form><p className="composer-footer">A helpful second perspective. Always give important details a second look.</p></div></div>
+      <div className="composer-region"><div className="composer-wrap">
+        {!imageMode && preview && <div className="preview-note"><Sparkles size={13}/> Local preview · sample replies, no model requests</div>}
+        {!imageMode && connection.mode === "live" && !connection.ready && <div className="offline-note">Your model may be stopped or loading. You can try again when it’s ready.</div>}
+        <form className={`composer${imageMode ? " image-composer" : ""}`} onSubmit={e => { e.preventDefault(); submitComposer(); }}>
+          {imageEnabled && <div className="composer-modes" role="group" aria-label="Composer mode">
+            <button type="button" aria-pressed={!imageMode} onClick={() => setComposerMode("chat")}><MessageSquare size={14} aria-hidden="true"/>Chat</button>
+            <button type="button" aria-pressed={imageMode} onClick={() => setComposerMode("image")}><ImagePlus size={14} aria-hidden="true"/>Create image</button>
+          </div>}
+          <label className="sr-only" htmlFor="message">{imageMode ? "Describe your image" : "Message Qwen"}</label>
+          <textarea ref={textarea} id="message" placeholder={imageMode ? "Describe the image you want to create…" : "What’s on your mind?"}
+            value={draft} onChange={e => setDraft(e.target.value)}
+            maxLength={imageMode ? capability!.maxPromptLength : effectiveSettings.inputCharacters}
+            rows={1} onKeyDown={e => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                if (!e.repeat) submitComposer();
+              }
+            }}/>
+          <div className="composer-bottom">
+            {imageMode ? <span className="composer-image-size">1 square image · 1024 × 1024</span> : <span className="composer-model">{logo} {selectedLabel}</span>}
+            <div className="composer-controls">
+              <span className="enter-hint">Shift + Enter for a new line</span>
+              {busy && <button type="button" className="send-button stop-button" aria-label={imageMode ? "Stop text reply" : "Stop generation"} onClick={() => controller.current?.abort()}><Square size={15} fill="currentColor"/></button>}
+              {(imageMode || !busy) && <button className="send-button" aria-label={imageMode ? "Generate image" : "Send message"} disabled={!draft.trim()}>
+                {imageMode ? <ImagePlus size={18} aria-hidden="true"/> : <ArrowUp size={20} aria-hidden="true"/>}
+              </button>}
+            </div>
+          </div>
+        </form>
+        <p className="composer-footer">{imageMode ? "Generated images are saved in this browser." : "A helpful second perspective. Always give important details a second look."}</p>
+      </div></div>
     </div>
     {toast && <div className="toast" role="status">{toast}<button onClick={() => setToast("")} aria-label="Dismiss notification"><X size={14}/></button></div>}
-    {(settings || deleting) && <div className="modal-backdrop" onClick={() => { setSettings(false); setDeleting(null); }}><div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" ref={dialog} onKeyDown={trapFocus} onClick={e => e.stopPropagation()}><button className="icon-button close-dialog" onClick={() => { setSettings(false); setDeleting(null); }} aria-label="Close dialog"><X size={20}/></button>{deleting ? <><div className="eyebrow">MAKE A LITTLE ROOM</div><h2 id="dialog-title">Delete this conversation?</h2><p>This removes the conversation from this browser. It can’t be undone.</p><div className="dialog-buttons"><button className="secondary-button" onClick={() => setDeleting(null)}>Keep conversation</button><button className="danger-button" onClick={() => { if (busy === deleting) controller.current?.abort(); setChats(prev => prev.filter(c => c.id !== deleting)); if (activeId === deleting) setActiveId(null); setDeleting(null); }}>Delete conversation</button></div></> : <><div className="eyebrow">MAKE YOURSELF AT HOME</div><h2 id="dialog-title">Your workspace</h2><ModelSettingsPanel connections={connections} preferences={preferences} busy={!!busy}
+    {(settings || deleting) && <div className="modal-backdrop" onClick={() => { setSettings(false); setDeleting(null); }}><div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" ref={dialog} onKeyDown={trapFocus} onClick={e => e.stopPropagation()}><button className="icon-button close-dialog" onClick={() => { setSettings(false); setDeleting(null); }} aria-label="Close dialog"><X size={20}/></button>{deleting ? <><div className="eyebrow">MAKE A LITTLE ROOM</div><h2 id="dialog-title">Delete this conversation?</h2><p>This removes the conversation from this browser. It can’t be undone.</p><div className="dialog-buttons"><button className="secondary-button" onClick={() => setDeleting(null)}>Keep conversation</button><button className="danger-button" onClick={confirmDelete}>Delete conversation</button></div></> : <><div className="eyebrow">MAKE YOURSELF AT HOME</div><h2 id="dialog-title">Your workspace</h2><ModelSettingsPanel connections={connections} preferences={preferences} busy={!!busy}
       temperature={temperature} onTemperatureChange={setTemperature}
       diagnosticsEnabled={diagnosticsEnabled} onDiagnosticsChange={(model, enabled) => setDiagnosticsEnabled(previous => ({ ...previous, [model]: enabled }))}
       onRefresh={() => { void statusRequests.current?.refresh(); }}

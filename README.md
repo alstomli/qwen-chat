@@ -135,6 +135,24 @@ npm run dev
 
 No database, paid chat provider, or OpenAI account is required. The app is configured for your live Runpod model. For an isolated local preview, clear `RUNPOD_CHAT_URL` and set `CHAT_PREVIEW_MODE=true`; sample replies are clearly labeled and make no model requests. Stop the local server with Ctrl+C.
 
+## Create images
+
+Choose **Create image** in the composer, enter a prompt of up to 2,000 characters, and submit it. Each job creates one 1024 × 1024 image using Runpod's managed FLUX.1 Schnell endpoint. When the image is ready, download it or select **Regenerate** to submit a new job with the same prompt. Choose **Chat** to send text to Qwen. Image jobs and their prompts stay out of Qwen's text history.
+
+Completed images are saved in IndexedDB for this browser and site. Clear site data or delete the conversation to remove local images. Download any image you want to keep outside the browser. Pending jobs can resume after a reload with the same signed-in session while the result is available. App job handles expire after at most 30 minutes. Leaving the page can interrupt polling while Runpod continues processing an accepted job. [Runpod request and result retention](https://docs.runpod.io/public-endpoints/requests)
+
+### Enable image generation
+
+1. Create a dedicated Runpod API key with the minimum permissions that let it submit jobs to and read results from the managed endpoint. [Runpod API key setup](https://docs.runpod.io/get-started/credentials)
+2. For local use, add `RUNPOD_IMAGE_API_KEY` to the ignored `.env.local` file and restart the app. For Vercel, add it as a Secret in the intended environment and redeploy. Use separate keys for Preview and Production if you enable both. Leaving the value empty disables image generation. [Vercel environment variables](https://vercel.com/docs/environment-variables)
+3. After enabling an environment, submit a single test prompt, verify the image downloads and survives a reload, and check the usage in Runpod Billing Explorer. Runpod lists about $0.0025 per successful 1024 × 1024 output. Regeneration is a new paid job if it succeeds. [Runpod Public Endpoint pricing](https://docs.runpod.io/public-endpoints/overview) · [Runpod billing](https://docs.runpod.io/accounts-billing/billing)
+
+The status check enables the composer based on key presence. If a job fails with a configured key, check its Runpod permissions, account balance, and endpoint availability. For repeated busy errors, check provider availability and wait before submitting again. The app limits submissions to 10 per minute per server instance on a best-effort basis. Runpod's account billing controls and app admission operate independently. To disable the mode, remove the key and restart or redeploy. To stop provider access immediately, disable the dedicated key in Runpod.
+
+### Verify without Runpod charges
+
+From the repository root with Node.js 22+ and dependencies installed, run `node scripts/check-image-generation.mjs`. It starts a loopback-only Next.js server on port 3004 with throwaway credentials and substitutes a fixture for the Runpod requests. Use `CHAT_IMAGE_TEST_PORT` if that port is in use. The HTTP check exercises session and origin checks, job states, and private image retrieval. To also test the browser composer, download, regeneration, failure handling, text chat, and reload from IndexedDB, set `CHAT_TEST_PLAYWRIGHT` to the absolute path of an installed Playwright `index.mjs`. Use its installed Chromium or set `CHAT_TEST_BROWSER_CHANNEL` to `msedge` or `chrome` for an installed browser.
+
 ## Included behavior
 
 - Streaming replies; stop generation, retry, copy response/code, Markdown, tables, and safe links.

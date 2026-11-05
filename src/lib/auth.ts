@@ -11,21 +11,30 @@ export function issueSession(now = Date.now()) {
   const payload = Buffer.from(JSON.stringify({ exp: Math.floor(now / 1000) + lifetime, nonce: randomBytes(16).toString("hex") })).toString("base64url");
   return payload + "." + createHmac("sha256", process.env.SESSION_SECRET!).update(payload).digest("base64url");
 }
-export function validSession(token: string | undefined, now = Date.now()) {
-  if (!token || !credentialsConfigured()) return false;
+function sessionExpiry(token: string | undefined, now = Date.now()): number | undefined {
+  if (!token || !credentialsConfigured()) return undefined;
   try {
     const [payload, signature, extra] = token.split(".");
-    if (extra || !payload || !signature) return false;
+    if (extra || !payload || !signature) return undefined;
     const expected = createHmac("sha256", process.env.SESSION_SECRET!).update(payload).digest();
     const actual = Buffer.from(signature, "base64url");
-    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return false;
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return undefined;
     const { exp } = JSON.parse(Buffer.from(payload, "base64url").toString());
-    return Number.isInteger(exp) && exp > Math.floor(now / 1000) && exp <= Math.floor(now / 1000) + lifetime;
-  } catch { return false; }
+    const nowSeconds = Math.floor(now / 1000);
+    if (Number.isInteger(exp) && exp > nowSeconds && exp <= nowSeconds + lifetime) return exp * 1000;
+  } catch { return undefined; }
+}
+export function validSession(token: string | undefined, now = Date.now()) {
+  return sessionExpiry(token, now) !== undefined;
+}
+export function authenticatedSession(request: Request) {
+  const cookies = request.headers.get("cookie")?.split(";").map(s => s.trim()) ?? [];
+  const token = cookies.find(s => s.startsWith(COOKIE + "="))?.slice(COOKIE.length + 1);
+  const expiresAt = sessionExpiry(token);
+  if (token && expiresAt !== undefined) return { token, expiresAt };
 }
 export function requestAuthenticated(request: Request) {
-  const cookies = request.headers.get("cookie")?.split(";").map(s => s.trim()) ?? [];
-  return validSession(cookies.find(s => s.startsWith(COOKIE + "="))?.slice(COOKIE.length + 1));
+  return authenticatedSession(request) !== undefined;
 }
 export function sameOrigin(request: Request) {
   const origin = request.headers.get("origin");
