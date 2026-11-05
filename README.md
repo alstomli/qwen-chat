@@ -8,6 +8,31 @@ The frontend can run locally at `http://127.0.0.1:3001`; the hosted production s
 
 ## Choose a model
 
+When the BF16 gateway advertises adapter switching, a **Use trained adapter**
+switch appears below the model selector. New conversations default to On:
+On requests the registered adapter, while Off requests the original BF16 base.
+The choice is saved per conversation; each new assistant answer records its own
+mode and is labeled **BF16 + adapter** or **BF16 base**. Changing the choice does
+not relabel earlier answers. Legacy answers retain their existing model labels
+because their original adapter state cannot be inferred. The switch is hidden
+for 4bit and for gateways that do not support the feature, and is disabled while
+an answer is generating. Switching an active conversation keeps its history;
+start fresh conversations with the same settings for a controlled comparison.
+
+Deploy the companion gateway update first, retaining the current LoRA Pod
+environment settings. The frontend checks the gateway's versioned capability
+and verifies `X-Chat-Adapter-Enabled` on successful responses. A saved Off choice
+on an incompatible connection fails instead of silently using the adapter.
+No new frontend environment variables are needed. Switching requests needs no
+model reload; installing the backend update uses the normal image deployment.
+
+Validation includes `npm test`, `npm run typecheck`, `npm run build`, and the
+local HTTP check `node scripts/check-adapter-toggle.mjs`. The latter expects a
+local app connected to the companion backend's `chat_test_fixture.py` with
+`CHAT_FIXTURE_ADAPTER=true`; it uses a fake model and never calls the live Pod.
+The optional `CHAT_ADAPTER_TEST_BASE` defaults to `http://127.0.0.1:3003` and
+`CHAT_ADAPTER_TEST_PASSWORD` defaults to the test-only `adapter-preview-only`.
+
 The header selector switches the next request between `Qwen3.8-27B-4bit` and
 `Qwen3.8-27B-bf16`. Both Pods remain running; selecting a model does not reload
 weights. Selection is saved with each conversation, and assistant messages retain

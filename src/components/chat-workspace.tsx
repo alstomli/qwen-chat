@@ -11,7 +11,7 @@ import { DEFAULT_SETTINGS, SETTINGS_MAX, SETTINGS_KEY, MODEL_SETTINGS_KEY, parse
 import { consumeCompletion } from "@/lib/protocol";
 import { completedHistory, parseConversations, STORAGE_KEY, type Conversation, type Message } from "@/lib/storage";
 
-import { DEFAULT_MODEL, MODELS, modelInfo, type ModelId } from "@/lib/models";
+import { DEFAULT_MODEL, MODELS, modelInfo, answerModelLabel, type ModelId } from "@/lib/models";
 import { allModelStatusRequests, initialModelConnections, updateModelConnection } from "@/lib/model-status";
 const starters = [
   { icon: Feather, label: "Find the right words", text: "Help me write a thoughtful email to reconnect with an old colleague. Keep it warm and natural.", caption: "A first draft, a fresh perspective" },
@@ -30,6 +30,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   const [connections, setConnections] = useState(initialModelConnections);
   const statusRequests = useRef<ReturnType<typeof allModelStatusRequests> | null>(null);
   const [draftModel, setDraftModel] = useState<ModelId>(DEFAULT_MODEL);
+  const [draftAdapter, setDraftAdapter] = useState(true);
   const [busy, setBusy] = useState<string | null>(null); const [toast, setToast] = useState(""); const [preferences, setPreferences] = useState<ModelSettings>({ "4bit": { ...DEFAULT_SETTINGS }, bf16: { ...DEFAULT_SETTINGS } }); const [temperature, setTemperature] = useState(0.7);
   const [diagnosticsEnabled, setDiagnosticsEnabled] = useState<Record<ModelId, boolean>>({ "4bit": false, bf16: false });
   const [diagnosticRecords, setDiagnosticRecords] = useState<DiagnosticRecord[]>([]);
@@ -48,8 +49,10 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   const controller = useRef<AbortController | null>(null); const textarea = useRef<HTMLTextAreaElement>(null); const searchInput = useRef<HTMLInputElement>(null); const bottom = useRef<HTMLDivElement>(null); const scroller = useRef<HTMLDivElement>(null); const follow = useRef(true); const dialog = useRef<HTMLDivElement>(null);
   const active = chats.find(c => c.id === activeId); const messages = active?.messages ?? [];
   const selectedModel = active?.model ?? draftModel;
-  const selectedLabel = modelInfo(selectedModel).label;
   const connection = connections[selectedModel];
+  const selectedAdapter = active ? active.useAdapter ?? true : draftAdapter;
+  const adapterAvailable = selectedModel === "bf16" && connection.adapterToggleAvailable === true;
+  const selectedLabel = answerModelLabel(selectedModel, adapterAvailable ? selectedAdapter : undefined);
   const preview = connection.mode === "preview";
   const limits = connection.limits ?? SETTINGS_MAX;
   const effectiveSettings = fitSettings(preferences[selectedModel], limits);
@@ -112,7 +115,12 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     } catch (error) { setLoginError(error instanceof Error ? error.message : "Couldn't sign in. Try again."); }
     finally { setSigningIn(false); }
   }
-  function newChat() { controller.current?.abort(); setDraftModel(selectedModel); setActiveId(null); setDraft(""); setSidebar(false); follow.current = true; textarea.current?.focus(); }
+  function newChat() { controller.current?.abort(); setDraftModel(selectedModel); setDraftAdapter(true); setActiveId(null); setDraft(""); setSidebar(false); follow.current = true; textarea.current?.focus(); }
+  function selectAdapter(useAdapter: boolean) {
+    if (controller.current || busy || !adapterAvailable) return;
+    if (activeId) setChats(previous => previous.map(chat => chat.id === activeId ? { ...chat, useAdapter } : chat));
+    else setDraftAdapter(useAdapter);
+  }
   function selectModel(model: ModelId) {
     if (controller.current || busy) return;
     if (activeId) setChats(prev => prev.map(chat => chat.id === activeId ? { ...chat, model } : chat));
@@ -127,16 +135,18 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     text = text.trim(); if (!text || controller.current) return;
     if (chats.length >= 100 && !activeId) { setToast("You have 100 saved chats. Delete one before starting another."); return; }
     if (!connection.ready || !connection.limits) { setToast(connection.error ?? "Wait for the server limits to be verified before sending."); return; }
+    if (selectedModel === "bf16" && selectedAdapter === false && !adapterAvailable) { setToast("Adapter selection is unavailable. Reconnect or start a new conversation."); return; }
+    const useAdapter = adapterAvailable ? selectedAdapter : undefined;
     if (text.length > effectiveSettings.inputCharacters) { setToast(`Please shorten your message to ${effectiveSettings.inputCharacters.toLocaleString()} characters or fewer.`); return; }
     const id = activeId ?? uid(); const responseId = uid();
-    const pending: Message[] = [...history, { id: uid(), role: "user", content: text }, { id: responseId, role: "assistant", content: "", model: selectedModel }];
+    const pending: Message[] = [...history, { id: uid(), role: "user", content: text }, { id: responseId, role: "assistant", content: "", model: selectedModel, useAdapter }];
     const candidates = [...completedHistory(history), { role: "user", content: text }];
     let input;
-    try { input = fitMessages(candidates, effectiveSettings, temperature, selectedModel); }
+    try { input = fitMessages(candidates, effectiveSettings, temperature, selectedModel, useAdapter); }
     catch (error) { setToast(error instanceof Error ? error.message : "Message exceeds your configured limits."); return; }
     const captureDiagnostic = diagnosticsEnabled[selectedModel] && connection.diagnosticsAvailable === true;
     if (captureDiagnostic) setDiagnosticRecords(records => [...records.slice(-99), {
-      id: responseId, createdAt: new Date().toISOString(), status: "pending", selectedModel,
+      id: responseId, createdAt: new Date().toISOString(), status: "pending", selectedModel, useAdapter,
       browserOriginalMessages: candidates.length, browserSentMessages: input.length,
       browserOriginalBytes: jsonBytes(candidates), browserSentBytes: jsonBytes(input),
       outputBudget: effectiveSettings.outputTokens, safetyReserve: effectiveSettings.safetyTokens,
@@ -147,13 +157,13 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       browserTimings: { firstContentMs: null, firstRenderMs: null, completionMs: null, elapsedMs: null },
     }]);
     const locallyTrimmed = input.length < completedHistory(history).length + 1;
-    setChats(prev => [{ id, model: selectedModel, title: active?.title ?? text.slice(0, 48), updatedAt: Date.now(), messages: pending }, ...prev.filter(c => c.id !== id)]);
+    setChats(prev => [{ id, model: selectedModel, useAdapter: useAdapter ?? active?.useAdapter, title: active?.title ?? text.slice(0, 48), updatedAt: Date.now(), messages: pending }, ...prev.filter(c => c.id !== id)]);
     setActiveId(id); setDraft(""); setSidebar(false); follow.current = true;
     const abort = new AbortController(); controller.current = abort; setBusy(id);
     let responseStarted = false;
     let contentReceived = false;
     try {
-      const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json", ...(captureDiagnostic ? { [DIAGNOSTICS_HEADER]: "1" } : {}) }, body: JSON.stringify({ model: selectedModel, messages: input, max_tokens: effectiveSettings.outputTokens, temperature, settings: effectiveSettings }), signal: abort.signal });
+      const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json", ...(captureDiagnostic ? { [DIAGNOSTICS_HEADER]: "1" } : {}) }, body: JSON.stringify({ model: selectedModel, useAdapter, messages: input, max_tokens: effectiveSettings.outputTokens, temperature, settings: effectiveSettings }), signal: abort.signal });
       const gateway = captureDiagnostic ? parseDiagnosticHeader(response.headers.get(DIAGNOSTICS_HEADER)) : null;
       if (captureDiagnostic) patchDiagnostic(responseId, { gateway });
       if (!response.ok || !response.body) { if (response.status === 401) setAuthenticated(false); throw new Error((await response.json()).error ?? "Couldn't start a reply."); }
@@ -218,9 +228,10 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     </aside>
     <div className="main-shell">
       <header className="workspace-header"><div className="workspace-heading"><button className="icon-button mobile-only" onClick={() => setSidebar(true)} aria-label="Open sidebar"><Menu size={20}/></button><span className="header-label">Personal workspace</span><span className="header-slash">/</span><label className="model-picker"><span className="sr-only">Model</span><select aria-label="Model" value={selectedModel} disabled={!!busy} onChange={e => selectModel(e.target.value as ModelId)}>{MODELS.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}</select><ChevronDown size={14} aria-hidden="true"/></label></div><button className={`connection-pill ${connection.mode === "live" && connection.ready ? "online" : preview ? "preview" : "offline"}`} onClick={() => setSettings(true)}><span/>{preview ? "Local preview" : connection.mode === "checking" ? "Connecting" : connection.mode === "unconfigured" ? "Setup needed" : connection.ready ? "Model online" : "Model offline"}<ArrowUpRight size={13}/></button></header>
+      {adapterAvailable && <div className="adapter-controls"><label className="adapter-toggle"><input type="checkbox" role="switch" aria-label="Use trained adapter" checked={selectedAdapter} disabled={!!busy || !connection.ready} onChange={event => selectAdapter(event.target.checked)}/><span>Use trained adapter</span><strong>{selectedAdapter ? "On" : "Off"}</strong></label><span>{selectedAdapter ? "BF16 + adapter" : "BF16 base"}</span></div>}
       <main className={`chat-main ${messages.length ? "has-messages" : ""}`} ref={scroller} onScroll={() => { const el = scroller.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>
         {!messages.length ? <div className="welcome"><div className="welcome-mark" aria-hidden="true"><span>✳</span><i/></div><div className="eyebrow">A FRESH CONVERSATION</div><h1>A little curiosity.<br/><em>A lot of possibility.</em></h1><p>Your space to think, write, and work things out.</p><div className="starter-grid">{starters.map(card => <button className="starter-card" key={card.label} onClick={() => { setDraft(card.text); textarea.current?.focus(); }}><div><card.icon size={20} strokeWidth={1.45}/><ArrowUpRight size={16}/></div><strong>{card.label}</strong><small>{card.caption}</small></button>)}</div></div>
-        : <div className="message-list">{messages.map((message, index) => <article className={`message ${message.role}`} key={message.id}><div className="message-avatar">{message.role === "assistant" ? logo : "Z"}</div><div className="message-body"><div className="message-author">{message.role === "user" ? "You" : modelInfo(message.model ?? DEFAULT_MODEL).label}{message.role === "assistant" && <span>ASSISTANT</span>}</div>{message.content ? message.role === "user" ? <p className="user-content">{message.content}</p> : <AnswerPaint messageId={message.id} onPaint={diagnosticsById.get(message.id)?.browserTimings?.firstRenderMs === null ? markFirstRender : undefined}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: ({ children }) => <CodeBlock>{children}</CodeBlock>, a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> }}>{message.content}</ReactMarkdown></AnswerPaint> : busy === activeId && index === messages.length - 1 ? <div className="thinking" aria-label="Qwen is thinking"><span/><span/><span/></div> : null}{diagnosticsById.has(message.id) && <RequestDiagnostics record={diagnosticsById.get(message.id)!}/>} {message.note && <div className={`message-note ${message.state === "error" ? "error" : ""}`} role={message.state === "error" ? "alert" : undefined}>{message.note}</div>}{message.role === "assistant" && busy !== activeId && <div className="message-actions">{message.content && <CopyButton text={message.content}/>} {index === messages.length - 1 && <button onClick={retry} disabled={!!busy}><RotateCcw size={14}/><span>Try again</span></button>}{message.state === "stopped" && <span>Stopped</span>}</div>}</div></article>)}<div ref={bottom}/></div>}
+        : <div className="message-list">{messages.map((message, index) => <article className={`message ${message.role}`} key={message.id}><div className="message-avatar">{message.role === "assistant" ? logo : "Z"}</div><div className="message-body"><div className="message-author">{message.role === "user" ? "You" : answerModelLabel(message.model ?? DEFAULT_MODEL, message.useAdapter)}{message.role === "assistant" && <span>ASSISTANT</span>}</div>{message.content ? message.role === "user" ? <p className="user-content">{message.content}</p> : <AnswerPaint messageId={message.id} onPaint={diagnosticsById.get(message.id)?.browserTimings?.firstRenderMs === null ? markFirstRender : undefined}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: ({ children }) => <CodeBlock>{children}</CodeBlock>, a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> }}>{message.content}</ReactMarkdown></AnswerPaint> : busy === activeId && index === messages.length - 1 ? <div className="thinking" aria-label="Qwen is thinking"><span/><span/><span/></div> : null}{diagnosticsById.has(message.id) && <RequestDiagnostics record={diagnosticsById.get(message.id)!}/>} {message.note && <div className={`message-note ${message.state === "error" ? "error" : ""}`} role={message.state === "error" ? "alert" : undefined}>{message.note}</div>}{message.role === "assistant" && busy !== activeId && <div className="message-actions">{message.content && <CopyButton text={message.content}/>} {index === messages.length - 1 && <button onClick={retry} disabled={!!busy}><RotateCcw size={14}/><span>Try again</span></button>}{message.state === "stopped" && <span>Stopped</span>}</div>}</div></article>)}<div ref={bottom}/></div>}
       </main>
       <div className="composer-region"><div className="composer-wrap">{preview && <div className="preview-note"><Sparkles size={13}/> Local preview · sample replies, no model requests</div>}{connection.mode === "live" && !connection.ready && <div className="offline-note">Your model may be stopped or loading. You can try again when it’s ready.</div>}<form className="composer" onSubmit={e => { e.preventDefault(); void send(); }}><label className="sr-only" htmlFor="message">Message Qwen</label><textarea ref={textarea} id="message" placeholder="What’s on your mind?" value={draft} onChange={e => setDraft(e.target.value)} maxLength={effectiveSettings.inputCharacters} rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}/><div className="composer-bottom"><span className="composer-model">{logo} {selectedLabel}</span><div className="composer-controls"><span className="enter-hint">Shift + Enter for a new line</span>{busy ? <button type="button" className="send-button stop-button" aria-label="Stop generation" onClick={() => controller.current?.abort()}><Square size={15} fill="currentColor"/></button> : <button className="send-button" aria-label="Send message" disabled={!draft.trim()}><ArrowUp size={20}/></button>}</div></div></form><p className="composer-footer">A helpful second perspective. Always give important details a second look.</p></div></div>
     </div>

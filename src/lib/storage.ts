@@ -1,6 +1,6 @@
 import { DEFAULT_MODEL, isModelId, type ModelId } from "./models";
-export type Message = { id: string; role: "user" | "assistant"; content: string; state?: "complete" | "stopped" | "error"; note?: string; model?: ModelId };
-export type Conversation = { id: string; title: string; updatedAt: number; messages: Message[]; model?: ModelId };
+export type Message = { id: string; role: "user" | "assistant"; content: string; state?: "complete" | "stopped" | "error"; note?: string; model?: ModelId; useAdapter?: boolean };
+export type Conversation = { id: string; title: string; updatedAt: number; messages: Message[]; model?: ModelId; useAdapter?: boolean };
 export const STORAGE_KEY = "qwen-chat.conversations.v1";
 export function parseConversations(raw: string | null): Conversation[] {
   if (!raw) return [];
@@ -9,7 +9,9 @@ export function parseConversations(raw: string | null): Conversation[] {
     if (!Array.isArray(value)) return [];
     return value.filter(c => c && typeof c.id === "string" && typeof c.title === "string" && typeof c.updatedAt === "number" && Array.isArray(c.messages) && c.messages.every((m: Message) => m && typeof m.id === "string" && ["user", "assistant"].includes(m.role) && typeof m.content === "string")).slice(0, 100).map(c => ({
       ...c, model: isModelId(c.model) ? c.model : DEFAULT_MODEL,
-      messages: c.messages.map((m: Message) => m.role === "assistant" ? { ...m, model: isModelId(m.model) ? m.model : DEFAULT_MODEL } : m),
+      useAdapter: typeof c.useAdapter === "boolean" ? c.useAdapter : undefined,
+      messages: c.messages.map((m: Message) => m.role === "assistant" ? { ...m, model: isModelId(m.model) ? m.model : DEFAULT_MODEL,
+        useAdapter: m.model === "bf16" && typeof m.useAdapter === "boolean" ? m.useAdapter : undefined } : m),
     }));
   } catch { return []; }
 }

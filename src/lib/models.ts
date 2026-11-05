@@ -13,3 +13,7 @@ export function parseModelId(value: unknown): ModelId {
   return value;
 }
 export function modelInfo(id: ModelId) { return MODELS.find(model => model.id === id)!; }
+export function answerModelLabel(id: ModelId, useAdapter?: boolean) {
+  return id === "bf16" && typeof useAdapter === "boolean"
+    ? useAdapter ? "BF16 + adapter" : "BF16 base" : modelInfo(id).label;
+}

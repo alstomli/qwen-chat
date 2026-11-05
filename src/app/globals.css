@@ -57,6 +57,13 @@
 .model-status-card small { display: block; font-size: 11px; color: #67715e; line-height: 1.5; overflow-wrap: anywhere; }
 .model-status-card .status-dot { flex-shrink: 0; }
 .model-settings-list { margin-top: 22px; }
+.adapter-controls { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 36px; border-bottom: 1px solid var(--border); color: #67715e; font-size: 11px; }
+.adapter-toggle { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; }
+.adapter-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--olive); }
+.adapter-toggle input:focus-visible { outline: 2px solid #476548; outline-offset: 3px; }
+.adapter-toggle input:disabled { cursor: wait; opacity: .6; }
+.adapter-toggle strong { font-size: 10px; font-weight: 600; color: var(--olive-dark); }
+@media (max-width: 760px) { .adapter-controls { padding: 10px 18px; gap: 8px; font-size: 10px; } }
 .model-settings-section { border: 1px solid #d9dfd1; border-radius: 8px; margin-top: 12px; }
 .model-settings-section > summary { padding: 15px; cursor: pointer; font-size: 12px; overflow-wrap: anywhere; }
 .model-settings-section > summary strong { margin-right: 12px; }
