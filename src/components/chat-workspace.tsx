@@ -31,7 +31,8 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   const statusRequests = useRef<ReturnType<typeof allModelStatusRequests> | null>(null);
   const [draftModel, setDraftModel] = useState<ModelId>(DEFAULT_MODEL);
   const [draftAdapter, setDraftAdapter] = useState(true);
-  const [busy, setBusy] = useState<string | null>(null); const [toast, setToast] = useState(""); const [preferences, setPreferences] = useState<ModelSettings>({ "4bit": { ...DEFAULT_SETTINGS }, bf16: { ...DEFAULT_SETTINGS } }); const [temperature, setTemperature] = useState(0.7);
+  const [streamingChats, setStreamingChats] = useState<Set<string>>(() => new Set());
+  const [toast, setToast] = useState(""); const [preferences, setPreferences] = useState<ModelSettings>({ "4bit": { ...DEFAULT_SETTINGS }, bf16: { ...DEFAULT_SETTINGS } }); const [temperature, setTemperature] = useState(0.7);
   const [diagnosticsEnabled, setDiagnosticsEnabled] = useState<Record<ModelId, boolean>>({ "4bit": false, bf16: false });
   const [diagnosticRecords, setDiagnosticRecords] = useState<DiagnosticRecord[]>([]);
   const diagnosticsById = new Map(diagnosticRecords.map(record => [record.id, record]));
@@ -46,8 +47,10 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     setDiagnosticRecords(records => records.map(record => record.id === id && record.browserStartedAt !== undefined && record.browserTimings && record.browserTimings.firstRenderMs === null
       ? { ...record, browserTimings: { ...record.browserTimings, firstRenderMs: observed - record.browserStartedAt } } : record));
   }, []);
-  const controller = useRef<AbortController | null>(null); const textarea = useRef<HTMLTextAreaElement>(null); const searchInput = useRef<HTMLInputElement>(null); const bottom = useRef<HTMLDivElement>(null); const scroller = useRef<HTMLDivElement>(null); const follow = useRef(true); const dialog = useRef<HTMLDivElement>(null);
+  const controllers = useRef(new Map<string, AbortController>());
+  const textarea = useRef<HTMLTextAreaElement>(null); const searchInput = useRef<HTMLInputElement>(null); const bottom = useRef<HTMLDivElement>(null); const scroller = useRef<HTMLDivElement>(null); const follow = useRef(true); const dialog = useRef<HTMLDivElement>(null);
   const active = chats.find(c => c.id === activeId); const messages = active?.messages ?? [];
+  const busy = activeId !== null && streamingChats.has(activeId);
   const selectedModel = active?.model ?? draftModel;
   const connection = connections[selectedModel];
   const selectedAdapter = active ? active.useAdapter ?? true : draftAdapter;
@@ -88,7 +91,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     return () => { requests.dispose(); clearInterval(timer); if (statusRequests.current === requests) statusRequests.current = null; };
   }, [authenticated, loaded]);
   useEffect(() => { if (settings) void statusRequests.current?.refresh(); }, [settings]);
-  useEffect(() => { if (follow.current) bottom.current?.scrollIntoView({ behavior: busy ? "instant" : "smooth" }); }, [chats, busy]);
+  useEffect(() => { if (follow.current) bottom.current?.scrollIntoView({ behavior: busy ? "instant" : "smooth" }); }, [active, busy]);
   useEffect(() => { if (textarea.current) { textarea.current.style.height = "auto"; textarea.current.style.height = Math.min(textarea.current.scrollHeight, 160) + "px"; } }, [draft]);
   useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(""), 6000); return () => clearTimeout(timer); }, [toast]);
   useEffect(() => {
@@ -104,7 +107,11 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     dialog.current?.querySelector<HTMLElement>("button, select, input")?.focus();
     return () => previous?.focus();
   }, [settings, deleting]);
-  useEffect(() => () => controller.current?.abort(), []);
+  useEffect(() => {
+    if (!authenticated) return;
+    const requests = controllers.current;
+    return () => { for (const request of requests.values()) request.abort(); };
+  }, [authenticated]);
 
   async function login(event: FormEvent) {
     event.preventDefault(); setSigningIn(true); setLoginError("");
@@ -115,14 +122,14 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     } catch (error) { setLoginError(error instanceof Error ? error.message : "Couldn't sign in. Try again."); }
     finally { setSigningIn(false); }
   }
-  function newChat() { controller.current?.abort(); setDraftModel(selectedModel); setDraftAdapter(true); setActiveId(null); setDraft(""); setSidebar(false); follow.current = true; textarea.current?.focus(); }
+  function newChat() { setDraftModel(selectedModel); setDraftAdapter(true); setActiveId(null); setDraft(""); setSidebar(false); follow.current = true; textarea.current?.focus(); }
   function selectAdapter(useAdapter: boolean) {
-    if (controller.current || busy || !adapterAvailable) return;
+    if ((activeId && controllers.current.has(activeId)) || !adapterAvailable) return;
     if (activeId) setChats(previous => previous.map(chat => chat.id === activeId ? { ...chat, useAdapter } : chat));
     else setDraftAdapter(useAdapter);
   }
   function selectModel(model: ModelId) {
-    if (controller.current || busy) return;
+    if (activeId && controllers.current.has(activeId)) return;
     if (activeId) setChats(prev => prev.map(chat => chat.id === activeId ? { ...chat, model } : chat));
     else setDraftModel(model);
     void statusRequests.current?.refresh();
@@ -132,7 +139,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   }
   async function send(text = draft, history = messages) {
     const submitted = performance.now();
-    text = text.trim(); if (!text || controller.current) return;
+    text = text.trim(); if (!text || (activeId && controllers.current.has(activeId))) return;
     if (chats.length >= 100 && !activeId) { setToast("You have 100 saved chats. Delete one before starting another."); return; }
     if (!connection.ready || !connection.limits) { setToast(connection.error ?? "Wait for the server limits to be verified before sending."); return; }
     if (selectedModel === "bf16" && selectedAdapter === false && !adapterAvailable) { setToast("Adapter selection is unavailable. Reconnect or start a new conversation."); return; }
@@ -159,7 +166,10 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     const locallyTrimmed = input.length < completedHistory(history).length + 1;
     setChats(prev => [{ id, model: selectedModel, useAdapter: useAdapter ?? active?.useAdapter, title: active?.title ?? text.slice(0, 48), updatedAt: Date.now(), messages: pending }, ...prev.filter(c => c.id !== id)]);
     setActiveId(id); setDraft(""); setSidebar(false); follow.current = true;
-    const abort = new AbortController(); controller.current = abort; setBusy(id);
+    const abort = new AbortController();
+    controllers.current.set(id, abort);
+    setStreamingChats(previous => new Set(previous).add(id));
+    textarea.current?.focus();
     let responseStarted = false;
     let contentReceived = false;
     try {
@@ -190,12 +200,17 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       else updateMessage(id, responseId, { state: "error", note: error instanceof Error ? error.message : "The connection was interrupted. Please retry." });
     } finally {
       if (captureDiagnostic) patchBrowserTiming(responseId, { elapsedMs: performance.now() - submitted });
-      controller.current = null; setBusy(null); textarea.current?.focus();
+      controllers.current.delete(id);
+      setStreamingChats(previous => {
+        const next = new Set(previous);
+        next.delete(id);
+        return next;
+      });
     }
   }
   function retry() { const index = messages.findLastIndex(m => m.role === "user"); if (index >= 0) void send(messages[index].content, messages.slice(0, index)); }
   async function logout() {
-    controller.current?.abort();
+    for (const request of controllers.current.values()) request.abort();
     try { const res = await fetch("/api/logout", { method: "POST" }); if (!res.ok) throw new Error(); setAuthenticated(false); setSettings(false); setLoaded(false); setChats([]); setDiagnosticRecords([]); setDiagnosticsEnabled({ "4bit": false, bf16: false }); setActiveId(null); }
     catch { setToast("Couldn't sign out. Please try again."); }
   }
@@ -223,20 +238,20 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       <button className="new-chat" onClick={newChat}><Plus size={17}/> New conversation <span>↗</span></button>
       <div className="search-chats"><Search size={15}/><input ref={searchInput} aria-label="Search conversations" placeholder="Search conversations" value={search} onChange={e => setSearch(e.target.value)}/><kbd>⌘ K</kbd></div>
       <div className="history-heading">YOUR CONVERSATIONS<span>{chats.length.toString().padStart(2, "0")}</span></div>
-      <div className="history-list">{chats.filter(c => c.title.toLowerCase().includes(search.toLowerCase())).map(chat => <div className={`history-item ${chat.id === activeId ? "active" : ""}`} key={chat.id}><button className="history-link" onClick={() => { setActiveId(chat.id); setDraft(""); setSidebar(false); follow.current = true; }}><MessageSquare size={15}/><span>{chat.title}</span></button><button className="delete-chat" aria-label={`Delete ${chat.title}`} onClick={() => setDeleting(chat.id)}><Trash2 size={14}/></button></div>)}{!chats.length && <div className="empty-history"><MessageSquare size={23} strokeWidth={1.3}/><p>Good conversations<br/>start with a little curiosity.</p><span>Your chats will appear here.</span></div>}{chats.length > 0 && !chats.some(c => c.title.toLowerCase().includes(search.toLowerCase())) && <p className="no-results">No conversations found.</p>}</div>
+      <div className="history-list">{chats.filter(c => c.title.toLowerCase().includes(search.toLowerCase())).map(chat => <div className={`history-item ${chat.id === activeId ? "active" : ""}`} key={chat.id}><button className="history-link" onClick={() => { setActiveId(chat.id); setDraft(""); setSidebar(false); follow.current = true; }}>{streamingChats.has(chat.id) ? <LoaderCircle size={15} className="spin" aria-hidden="true"/> : <MessageSquare size={15} aria-hidden="true"/>}<span>{chat.title}</span>{streamingChats.has(chat.id) && <span className="sr-only">Reply in progress</span>}</button><button className="delete-chat" aria-label={`Delete ${chat.title}`} onClick={() => setDeleting(chat.id)}><Trash2 size={14}/></button></div>)}{!chats.length && <div className="empty-history"><MessageSquare size={23} strokeWidth={1.3}/><p>Good conversations<br/>start with a little curiosity.</p><span>Your chats will appear here.</span></div>}{chats.length > 0 && !chats.some(c => c.title.toLowerCase().includes(search.toLowerCase())) && <p className="no-results">No conversations found.</p>}</div>
       <div className="sidebar-bottom"><div className="private-note"><ShieldCheck size={15}/><span>Saved only in this browser</span></div><button className="profile-button" onClick={() => setSettings(true)}><span className="avatar">Z</span><span><strong>Your workspace</strong><small>Personal account</small></span><Settings2 size={17}/></button></div>
     </aside>
     <div className="main-shell">
-      <header className="workspace-header"><div className="workspace-heading"><button className="icon-button mobile-only" onClick={() => setSidebar(true)} aria-label="Open sidebar"><Menu size={20}/></button><span className="header-label">Personal workspace</span><span className="header-slash">/</span><label className="model-picker"><span className="sr-only">Model</span><select aria-label="Model" value={selectedModel} disabled={!!busy} onChange={e => selectModel(e.target.value as ModelId)}>{MODELS.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}</select><ChevronDown size={14} aria-hidden="true"/></label></div><button className={`connection-pill ${connection.mode === "live" && connection.ready ? "online" : preview ? "preview" : "offline"}`} onClick={() => setSettings(true)}><span/>{preview ? "Local preview" : connection.mode === "checking" ? "Connecting" : connection.mode === "unconfigured" ? "Setup needed" : connection.ready ? "Model online" : "Model offline"}<ArrowUpRight size={13}/></button></header>
-      {adapterAvailable && <div className="adapter-controls"><label className="adapter-toggle"><input type="checkbox" role="switch" aria-label="Use trained adapter" checked={selectedAdapter} disabled={!!busy || !connection.ready} onChange={event => selectAdapter(event.target.checked)}/><span>Use trained adapter</span><strong>{selectedAdapter ? "On" : "Off"}</strong></label><span>{selectedAdapter ? "BF16 + adapter" : "BF16 base"}</span></div>}
+      <header className="workspace-header"><div className="workspace-heading"><button className="icon-button mobile-only" onClick={() => setSidebar(true)} aria-label="Open sidebar"><Menu size={20}/></button><span className="header-label">Personal workspace</span><span className="header-slash">/</span><label className="model-picker"><span className="sr-only">Model</span><select aria-label="Model" value={selectedModel} disabled={busy} onChange={e => selectModel(e.target.value as ModelId)}>{MODELS.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}</select><ChevronDown size={14} aria-hidden="true"/></label></div><button className={`connection-pill ${connection.mode === "live" && connection.ready ? "online" : preview ? "preview" : "offline"}`} onClick={() => setSettings(true)}><span/>{preview ? "Local preview" : connection.mode === "checking" ? "Connecting" : connection.mode === "unconfigured" ? "Setup needed" : connection.ready ? "Model online" : "Model offline"}<ArrowUpRight size={13}/></button></header>
+      {adapterAvailable && <div className="adapter-controls"><label className="adapter-toggle"><input type="checkbox" role="switch" aria-label="Use trained adapter" checked={selectedAdapter} disabled={busy || !connection.ready} onChange={event => selectAdapter(event.target.checked)}/><span>Use trained adapter</span><strong>{selectedAdapter ? "On" : "Off"}</strong></label><span>{selectedAdapter ? "BF16 + adapter" : "BF16 base"}</span></div>}
       <main className={`chat-main ${messages.length ? "has-messages" : ""}`} ref={scroller} onScroll={() => { const el = scroller.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>
         {!messages.length ? <div className="welcome"><div className="welcome-mark" aria-hidden="true"><span>✳</span><i/></div><div className="eyebrow">A FRESH CONVERSATION</div><h1>A little curiosity.<br/><em>A lot of possibility.</em></h1><p>Your space to think, write, and work things out.</p><div className="starter-grid">{starters.map(card => <button className="starter-card" key={card.label} onClick={() => { setDraft(card.text); textarea.current?.focus(); }}><div><card.icon size={20} strokeWidth={1.45}/><ArrowUpRight size={16}/></div><strong>{card.label}</strong><small>{card.caption}</small></button>)}</div></div>
-        : <div className="message-list">{messages.map((message, index) => <article className={`message ${message.role}`} key={message.id}><div className="message-avatar">{message.role === "assistant" ? logo : "Z"}</div><div className="message-body"><div className="message-author">{message.role === "user" ? "You" : answerModelLabel(message.model ?? DEFAULT_MODEL, message.useAdapter)}{message.role === "assistant" && <span>ASSISTANT</span>}</div>{message.content ? message.role === "user" ? <p className="user-content">{message.content}</p> : <AnswerPaint messageId={message.id} onPaint={diagnosticsById.get(message.id)?.browserTimings?.firstRenderMs === null ? markFirstRender : undefined}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: ({ children }) => <CodeBlock>{children}</CodeBlock>, a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> }}>{message.content}</ReactMarkdown></AnswerPaint> : busy === activeId && index === messages.length - 1 ? <div className="thinking" aria-label="Qwen is thinking"><span/><span/><span/></div> : null}{diagnosticsById.has(message.id) && <RequestDiagnostics record={diagnosticsById.get(message.id)!}/>} {message.note && <div className={`message-note ${message.state === "error" ? "error" : ""}`} role={message.state === "error" ? "alert" : undefined}>{message.note}</div>}{message.role === "assistant" && busy !== activeId && <div className="message-actions">{message.content && <CopyButton text={message.content}/>} {index === messages.length - 1 && <button onClick={retry} disabled={!!busy}><RotateCcw size={14}/><span>Try again</span></button>}{message.state === "stopped" && <span>Stopped</span>}</div>}</div></article>)}<div ref={bottom}/></div>}
+        : <div className="message-list">{messages.map((message, index) => <article className={`message ${message.role}`} key={message.id}><div className="message-avatar">{message.role === "assistant" ? logo : "Z"}</div><div className="message-body"><div className="message-author">{message.role === "user" ? "You" : answerModelLabel(message.model ?? DEFAULT_MODEL, message.useAdapter)}{message.role === "assistant" && <span>ASSISTANT</span>}</div>{message.content ? message.role === "user" ? <p className="user-content">{message.content}</p> : <AnswerPaint messageId={message.id} onPaint={diagnosticsById.get(message.id)?.browserTimings?.firstRenderMs === null ? markFirstRender : undefined}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: ({ children }) => <CodeBlock>{children}</CodeBlock>, a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> }}>{message.content}</ReactMarkdown></AnswerPaint> : busy && index === messages.length - 1 ? <div className="thinking" aria-label="Qwen is thinking"><span/><span/><span/></div> : null}{diagnosticsById.has(message.id) && <RequestDiagnostics record={diagnosticsById.get(message.id)!}/>} {message.note && <div className={`message-note ${message.state === "error" ? "error" : ""}`} role={message.state === "error" ? "alert" : undefined}>{message.note}</div>}{message.role === "assistant" && !busy && <div className="message-actions">{message.content && <CopyButton text={message.content}/>} {index === messages.length - 1 && <button onClick={retry}><RotateCcw size={14}/><span>Try again</span></button>}{message.state === "stopped" && <span>Stopped</span>}</div>}</div></article>)}<div ref={bottom}/></div>}
       </main>
-      <div className="composer-region"><div className="composer-wrap">{preview && <div className="preview-note"><Sparkles size={13}/> Local preview · sample replies, no model requests</div>}{connection.mode === "live" && !connection.ready && <div className="offline-note">Your model may be stopped or loading. You can try again when it’s ready.</div>}<form className="composer" onSubmit={e => { e.preventDefault(); void send(); }}><label className="sr-only" htmlFor="message">Message Qwen</label><textarea ref={textarea} id="message" placeholder="What’s on your mind?" value={draft} onChange={e => setDraft(e.target.value)} maxLength={effectiveSettings.inputCharacters} rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}/><div className="composer-bottom"><span className="composer-model">{logo} {selectedLabel}</span><div className="composer-controls"><span className="enter-hint">Shift + Enter for a new line</span>{busy ? <button type="button" className="send-button stop-button" aria-label="Stop generation" onClick={() => controller.current?.abort()}><Square size={15} fill="currentColor"/></button> : <button className="send-button" aria-label="Send message" disabled={!draft.trim()}><ArrowUp size={20}/></button>}</div></div></form><p className="composer-footer">A helpful second perspective. Always give important details a second look.</p></div></div>
+      <div className="composer-region"><div className="composer-wrap">{preview && <div className="preview-note"><Sparkles size={13}/> Local preview · sample replies, no model requests</div>}{connection.mode === "live" && !connection.ready && <div className="offline-note">Your model may be stopped or loading. You can try again when it’s ready.</div>}<form className="composer" onSubmit={e => { e.preventDefault(); void send(); }}><label className="sr-only" htmlFor="message">Message Qwen</label><textarea ref={textarea} id="message" placeholder="What’s on your mind?" value={draft} onChange={e => setDraft(e.target.value)} maxLength={effectiveSettings.inputCharacters} rows={1} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}/><div className="composer-bottom"><span className="composer-model">{logo} {selectedLabel}</span><div className="composer-controls"><span className="enter-hint">Shift + Enter for a new line</span>{busy ? <button type="button" className="send-button stop-button" aria-label="Stop generation" onClick={() => { if (activeId) controllers.current.get(activeId)?.abort(); textarea.current?.focus(); }}><Square size={15} fill="currentColor"/></button> : <button className="send-button" aria-label="Send message" disabled={!draft.trim()}><ArrowUp size={20}/></button>}</div></div></form><p className="composer-footer">A helpful second perspective. Always give important details a second look.</p></div></div>
     </div>
     {toast && <div className="toast" role="status">{toast}<button onClick={() => setToast("")} aria-label="Dismiss notification"><X size={14}/></button></div>}
-    {(settings || deleting) && <div className="modal-backdrop" onClick={() => { setSettings(false); setDeleting(null); }}><div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" ref={dialog} onKeyDown={trapFocus} onClick={e => e.stopPropagation()}><button className="icon-button close-dialog" onClick={() => { setSettings(false); setDeleting(null); }} aria-label="Close dialog"><X size={20}/></button>{deleting ? <><div className="eyebrow">MAKE A LITTLE ROOM</div><h2 id="dialog-title">Delete this conversation?</h2><p>This removes the conversation from this browser. It can’t be undone.</p><div className="dialog-buttons"><button className="secondary-button" onClick={() => setDeleting(null)}>Keep conversation</button><button className="danger-button" onClick={() => { if (busy === deleting) controller.current?.abort(); setChats(prev => prev.filter(c => c.id !== deleting)); if (activeId === deleting) setActiveId(null); setDeleting(null); }}>Delete conversation</button></div></> : <><div className="eyebrow">MAKE YOURSELF AT HOME</div><h2 id="dialog-title">Your workspace</h2><ModelSettingsPanel connections={connections} preferences={preferences} busy={!!busy}
+    {(settings || deleting) && <div className="modal-backdrop" onClick={() => { setSettings(false); setDeleting(null); }}><div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" ref={dialog} onKeyDown={trapFocus} onClick={e => e.stopPropagation()}><button className="icon-button close-dialog" onClick={() => { setSettings(false); setDeleting(null); }} aria-label="Close dialog"><X size={20}/></button>{deleting ? <><div className="eyebrow">MAKE A LITTLE ROOM</div><h2 id="dialog-title">Delete this conversation?</h2><p>This removes the conversation from this browser. It can’t be undone.</p><div className="dialog-buttons"><button className="secondary-button" onClick={() => setDeleting(null)}>Keep conversation</button><button className="danger-button" onClick={() => { controllers.current.get(deleting)?.abort(); setChats(prev => prev.filter(c => c.id !== deleting)); if (activeId === deleting) setActiveId(null); setDeleting(null); }}>Delete conversation</button></div></> : <><div className="eyebrow">MAKE YOURSELF AT HOME</div><h2 id="dialog-title">Your workspace</h2><ModelSettingsPanel connections={connections} preferences={preferences} busy={streamingChats.size > 0}
       temperature={temperature} onTemperatureChange={setTemperature}
       diagnosticsEnabled={diagnosticsEnabled} onDiagnosticsChange={(model, enabled) => setDiagnosticsEnabled(previous => ({ ...previous, [model]: enabled }))}
       onRefresh={() => { void statusRequests.current?.refresh(); }}
