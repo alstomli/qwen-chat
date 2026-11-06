@@ -46,6 +46,7 @@ export async function gatewayCapabilities(config: ReturnType<typeof connectionCo
   if (body.ready !== true || body.model !== modelInfo(config.model).alias) throw new Error("The selected model could not be verified at its gateway.");
   if (body.settingsVersion !== 1) throw new Error("Update the chat gateway to use configurable settings.");
   return { limits: parseServerLimits(body.limits), diagnosticsVersion: body.diagnosticsVersion === 1 ? 1 : 0,
+    docsModeVersion: body.docsModeVersion === 1 ? 1 : 0,
     adapterToggleAvailable: config.model === "bf16" && body.adapterToggleVersion === 1 && body.adapterToggleAvailable === true,
     imageInput: config.model === "bf16" && body.imageInputVersion === 1 ? parseImageInputLimits(body.imageInput) : undefined };
 }

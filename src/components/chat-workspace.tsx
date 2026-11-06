@@ -9,6 +9,8 @@ import { AnswerPaint } from "@/components/answer-paint";
 import { ModelSettingsPanel } from "@/components/model-settings-panel";
 import { DEFAULT_SETTINGS, SETTINGS_MAX, SETTINGS_KEY, MODEL_SETTINGS_KEY, parseModelSettings, fitSettings, fitMessages, jsonBytes, type ModelSettings } from "@/lib/chat-settings";
 import { consumeCompletion } from "@/lib/protocol";
+import { DOCS_GATEWAY_ERROR, DOCS_MODE_HEADER, DOCS_SOURCES_HEADER, DOCS_UNAVAILABLE_ERROR, parseDocsSourcesHeader } from "@/lib/docs-sources";
+import { remarkDocsCitations } from "@/lib/docs-citations";
 import { IMAGE_ACCEPTED_HEADER, IMAGE_ADAPTER_ERROR, validateImageInput } from "@/lib/image-input";
 import { prepareImage, type ImageAttachment } from "@/lib/prepare-image";
 import { completedHistory, parseConversations, STORAGE_KEY, type Conversation, type Message } from "@/lib/storage";
@@ -29,6 +31,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   const [chats, setChats] = useState<Conversation[]>([]); const [loaded, setLoaded] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null); const [draft, setDraft] = useState(""); const [search, setSearch] = useState("");
   const [attachment, setAttachment] = useState<ImageAttachment | null>(null);
+  const [docsMode, setDocsMode] = useState(false);
   const [readingImage, setReadingImage] = useState(false);
   const [retryImageId, setRetryImageId] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -63,16 +66,24 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   const adapterAvailable = selectedModel === "bf16" && connection.adapterToggleAvailable === true;
   const selectedLabel = answerModelLabel(selectedModel, adapterAvailable ? selectedAdapter : undefined);
   const preview = connection.mode === "preview";
+  const docsAvailable = connection.mode === "live" && connection.ready && connection.docsModeAvailable === true;
+  const docsHelp = retryImageId ? "Cancel the image retry to use Runpod Docs."
+    : attachment || readingImage ? "Remove the image to use Runpod Docs."
+    : preview ? "Runpod Docs is unavailable in local preview."
+    : connection.docsModeUnavailable === "gateway" ? DOCS_GATEWAY_ERROR
+    : connection.docsModeUnavailable === "index" ? "Configure the local Runpod Docs index to enable this mode."
+    : !docsAvailable ? DOCS_UNAVAILABLE_ERROR : "Search official Runpod documentation. Text only.";
   const limits = connection.limits ?? SETTINGS_MAX;
   const effectiveSettings = fitSettings(preferences[selectedModel], limits);
   const imageInput = selectedModel === "bf16" && connection.mode === "live" && connection.ready ? connection.imageInput : undefined;
   const imageUnavailable = selectedModel !== "bf16" ? "Select the BF16 model to attach an image."
     : !imageInput ? "Image attachments require a connected BF16 gateway with image input enabled."
     : adapterAvailable && selectedAdapter ? IMAGE_ADAPTER_ERROR : "";
+  const attachmentUnavailable = docsMode ? "Runpod Docs supports text only." : imageUnavailable;
 
   useEffect(() => {
     if (!authenticated) return;
-    try { const stored = parseConversations(localStorage.getItem(STORAGE_KEY)); setChats(stored); setActiveId(stored[0]?.id ?? null); setDiagnosticRecords([]); setDiagnosticsEnabled({ "4bit": false, bf16: false }); }
+    try { const stored = parseConversations(localStorage.getItem(STORAGE_KEY)); setChats(stored); setActiveId(stored[0]?.id ?? null); setDocsMode(false); setDiagnosticRecords([]); setDiagnosticsEnabled({ "4bit": false, bf16: false }); }
     catch { setToast("Your browser couldn't load saved conversations."); }
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
@@ -143,6 +154,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       const pending = savedDrafts.current.get(id);
       savedDrafts.current.delete(id);
       setActiveId(id);
+      setDocsMode(false);
       setDraft(pending?.text ?? "");
       setAttachment(pending?.attachment ?? null);
       setRetryImageId(pending?.retryId ?? null);
@@ -154,10 +166,10 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     if (!switchConversation(null)) return;
     if (activeId === null && !attachment && !retryImageId) clearDraft();
     controller.current?.abort();
-    setDraftModel(selectedModel); setDraftAdapter(true); textarea.current?.focus();
+    setDocsMode(false); setDraftModel(selectedModel); setDraftAdapter(true); textarea.current?.focus();
   }
   async function chooseImage(file: File) {
-    if (imageUnavailable || !imageInput) { setToast(imageUnavailable); return; }
+    if (attachmentUnavailable || !imageInput) { setToast(attachmentUnavailable); return; }
     const version = ++imageRead.current;
     setReadingImage(true);
     try {
@@ -190,11 +202,12 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   function updateMessage(chatId: string, messageId: string, patch: Partial<Message> | ((m: Message) => Partial<Message>)) {
     setChats(prev => prev.map(chat => chat.id !== chatId ? chat : { ...chat, messages: chat.messages.map(m => m.id === messageId ? { ...m, ...(typeof patch === "function" ? patch(m) : patch) } : m) }));
   }
-  async function send(text = draft, retryId: string | null = retryImageId, image = attachment) {
+  async function send(text = draft, retryId: string | null = retryImageId, image = attachment, enableDocs = docsMode) {
     const submitted = performance.now();
     text = text.trim(); if (!text || controller.current) return;
     if (chats.length >= 100 && !activeId) { setToast("You have 100 saved chats. Delete one before starting another."); return; }
     if (!connection.ready || !connection.limits) { setToast(connection.error ?? "Wait for the server limits to be verified before sending."); return; }
+    if (enableDocs && !docsAvailable) { setToast(DOCS_UNAVAILABLE_ERROR); return; }
     if (selectedModel === "bf16" && selectedAdapter === false && !adapterAvailable) { setToast("Adapter selection is unavailable. Reconnect or start a new conversation."); return; }
     const useAdapter = adapterAvailable ? selectedAdapter : undefined;
     if (text.length > effectiveSettings.inputCharacters) { setToast(`Please shorten your message to ${effectiveSettings.inputCharacters.toLocaleString()} characters or fewer.`); return; }
@@ -203,16 +216,18 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     if (retryIndex >= 0 && messages[retryIndex].imageName && !image) { setToast("Reattach the image to retry this prompt."); return; }
     if (readingImage) { setToast("Wait for your image to finish preparing."); return; }
     if (image) {
+      if (enableDocs) { setToast("Runpod Docs supports text only."); return; }
       if (imageUnavailable || !imageInput) { setToast(imageUnavailable); return; }
       try { validateImageInput(image.dataUrl, imageInput); }
       catch (error) { setToast(error instanceof Error ? error.message : "The image attachment is invalid."); return; }
     }
     const history = retryIndex < 0 ? messages : messages.slice(0, retryIndex);
     const id = activeId ?? uid(); const responseId = uid(); const userId = uid();
-    const pending: Message[] = [...history, { id: userId, role: "user", content: text, imageName: image?.name }, { id: responseId, role: "assistant", content: "", model: selectedModel, useAdapter }];
+    const requestedDocs = enableDocs ? true : undefined;
+    const pending: Message[] = [...history, { id: userId, role: "user", content: text, imageName: image?.name, docsMode: requestedDocs }, { id: responseId, role: "assistant", content: "", model: selectedModel, useAdapter }];
     const candidates = [...completedHistory(history), { role: "user", content: text }];
     let input;
-    try { input = fitMessages(candidates, effectiveSettings, temperature, selectedModel, useAdapter, image?.dataUrl); }
+    try { input = fitMessages(candidates, effectiveSettings, temperature, selectedModel, useAdapter, image?.dataUrl, requestedDocs); }
     catch (error) { setToast(error instanceof Error ? error.message : "Message exceeds your configured limits."); return; }
     const captureDiagnostic = diagnosticsEnabled[selectedModel] && connection.diagnosticsAvailable === true;
     if (captureDiagnostic) setDiagnosticRecords(records => [...records.slice(-99), {
@@ -241,13 +256,21 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     let responseStarted = false;
     let contentReceived = false;
     try {
-      const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json", ...(captureDiagnostic ? { [DIAGNOSTICS_HEADER]: "1" } : {}) }, body: JSON.stringify({ model: selectedModel, useAdapter, messages: input, max_tokens: effectiveSettings.outputTokens, temperature, settings: effectiveSettings, image: image?.dataUrl }), signal: abort.signal });
+      const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json", ...(captureDiagnostic ? { [DIAGNOSTICS_HEADER]: "1" } : {}) }, body: JSON.stringify({ model: selectedModel, useAdapter, messages: input, max_tokens: effectiveSettings.outputTokens, temperature, settings: effectiveSettings, image: image?.dataUrl, docsMode: requestedDocs }), signal: abort.signal });
       const gateway = captureDiagnostic ? parseDiagnosticHeader(response.headers.get(DIAGNOSTICS_HEADER)) : null;
       if (captureDiagnostic) patchDiagnostic(responseId, { gateway });
       if (!response.ok || !response.body) { if (response.status === 401) setAuthenticated(false); throw new Error((await response.json()).error ?? "Couldn't start a reply."); }
       if (image && response.headers.get(IMAGE_ACCEPTED_HEADER) !== "true") {
         await response.body.cancel().catch(() => {});
         throw new Error("The model did not confirm receipt of the attached image. Try again when image input is available.");
+      }
+      if (enableDocs) {
+        const docsSources = parseDocsSourcesHeader(response.headers.get(DOCS_SOURCES_HEADER));
+        if (response.headers.get(DOCS_MODE_HEADER) !== "1" || !docsSources) {
+          await response.body.cancel().catch(() => {});
+          throw new Error("Runpod Docs mode could not be verified. Please try again.");
+        }
+        updateMessage(id, responseId, { docsSources });
       }
       responseStarted = true;
       if (captureDiagnostic) patchDiagnostic(responseId, { status: "streaming" });
@@ -281,10 +304,10 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     if (attachment || readingImage || retryImageId) { setToast("Finish or clear the current image draft before retrying."); return; }
     const image = sentImages.current.get(message.id)?.attachment;
     if (message.imageName && !image) {
-      setDraft(message.content); setRetryImageId(message.id); textarea.current?.focus();
+      setDocsMode(false); setDraft(message.content); setRetryImageId(message.id); textarea.current?.focus();
       return;
     }
-    void send(message.content, message.id, image ?? null);
+    void send(message.content, message.id, image ?? null, message.docsMode === true);
   }
   function deleteConversation() {
     if (busy === deleting) controller.current?.abort();
@@ -339,7 +362,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
             <div className="message-body">
               <div className="message-author">{message.role === "user" ? "You" : answerModelLabel(message.model ?? DEFAULT_MODEL, message.useAdapter)}{message.role === "assistant" && <span>ASSISTANT</span>}</div>
               {message.role === "user" && message.imageName && <MessageAttachment name={message.imageName} attachment={sentImages.current.get(message.id)?.attachment}/>}
-              {message.content ? message.role === "user" ? <p className="user-content">{message.content}</p> : <AnswerPaint messageId={message.id} onPaint={diagnosticsById.get(message.id)?.browserTimings?.firstRenderMs === null ? markFirstRender : undefined}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: ({ children }) => <CodeBlock>{children}</CodeBlock>, a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> }}>{message.content}</ReactMarkdown></AnswerPaint>
+              {message.content ? message.role === "user" ? <p className="user-content">{message.content}</p> : <AnswerPaint messageId={message.id} onPaint={diagnosticsById.get(message.id)?.browserTimings?.firstRenderMs === null ? markFirstRender : undefined}><MessageMarkdown message={message}/></AnswerPaint>
                 : busy === activeId && index === messages.length - 1 ? <div className="thinking" aria-label="Qwen is thinking"><span/><span/><span/></div> : null}
               {diagnosticsById.has(message.id) && <RequestDiagnostics record={diagnosticsById.get(message.id)!}/>}
               {message.note && <div className={`message-note ${message.state === "error" ? "error" : ""}`} role={message.state === "error" ? "alert" : undefined}>{message.note}</div>}
@@ -363,7 +386,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
             <button type="button" aria-label="Remove image" onClick={() => { removeAttachment(); textarea.current?.focus(); }}><X size={16} aria-hidden="true"/></button>
           </div>}
           <label className="sr-only" htmlFor="message">Message Qwen</label>
-          <textarea ref={textarea} id="message" placeholder="What’s on your mind?" value={draft} onChange={e => setDraft(e.target.value)}
+          <textarea ref={textarea} id="message" placeholder={docsMode ? "Ask about Runpod…" : "What’s on your mind?"} value={draft} onChange={e => setDraft(e.target.value)}
             maxLength={effectiveSettings.inputCharacters} rows={1} onKeyDown={e => {
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
@@ -371,25 +394,34 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
               }
             }}/>
           <input ref={fileInput} type="file" aria-label="Choose image file" accept={imageInput?.mimeTypes.join(",") ?? "image/jpeg,image/png,image/webp"}
-            hidden disabled={!!imageUnavailable || !!busy || readingImage} onChange={e => {
+            hidden disabled={!!attachmentUnavailable || !!busy || readingImage} onChange={e => {
               const file = e.currentTarget.files?.[0];
               e.currentTarget.value = "";
               if (file) void chooseImage(file);
             }}/>
+          <div className="composer-docs">
+            <label className="docs-toggle">
+              <input type="checkbox" role="switch" checked={docsMode} aria-describedby="docs-mode-help"
+                disabled={!!busy || (!docsMode && (!docsAvailable || !!attachment || readingImage || !!retryImageId))}
+                onChange={e => setDocsMode(e.target.checked)}/>
+              <span>Runpod Docs</span>
+            </label>
+            <span id="docs-mode-help">{docsHelp}</span>
+          </div>
           <div className="composer-bottom">
             <span className="composer-model">{logo} {selectedLabel}</span>
             <div className="composer-controls">
               <span className="enter-hint">Shift + Enter for a new line</span>
               <button type="button" className="attach-image-button" aria-label="Attach image" aria-describedby="image-input-help"
-                disabled={!!imageUnavailable || !!busy || readingImage} onClick={() => fileInput.current?.click()}>
+                disabled={!!attachmentUnavailable || !!busy || readingImage} onClick={() => fileInput.current?.click()}>
                 <ImagePlus size={17} aria-hidden="true"/>
               </button>
               {busy ? <button type="button" className="send-button stop-button" aria-label="Stop generation" onClick={() => controller.current?.abort()}><Square size={15} fill="currentColor"/></button>
-                : <button className="send-button" aria-label="Send message" disabled={!draft.trim() || readingImage || (!!attachment && !!imageUnavailable) || (!!retryImageId && !attachment)}><ArrowUp size={20}/></button>}
+                : <button className="send-button" aria-label="Send message" disabled={!draft.trim() || readingImage || (docsMode && !docsAvailable) || (!!attachment && !!attachmentUnavailable) || (!!retryImageId && !attachment)}><ArrowUp size={20}/></button>}
             </div>
           </div>
           <div className="composer-attachment-note" id="image-input-help" aria-live="polite">
-            {readingImage ? "Preparing image…" : retryImageId && !attachment ? "Reattach the original image to retry this message." : imageUnavailable}
+            {readingImage ? "Preparing image…" : retryImageId && !attachment ? "Reattach the original image to retry this message." : attachmentUnavailable}
             {retryImageId && !attachment && imageUnavailable && <span> {imageUnavailable}</span>}
             {retryImageId && <button type="button" onClick={clearDraft}>Cancel retry</button>}
           </div>
@@ -405,6 +437,20 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       onApply={(model, next) => { setPreferences(previous => ({ ...previous, [model]: next })); setToast(`${modelInfo(model).label} settings saved.`); }}/>
       {diagnosticRecords.length > 0 && <div className="diagnostic-session"><p className="settings-help">{diagnosticRecords.length} diagnostic records in this session (latest 100). Reloading or signing out clears them.</p><button type="button" className="secondary-button" onClick={() => exportDiagnostics(diagnosticRecords)}>Export session CSV</button></div>}<p className="settings-footnote">Chats stay in this browser. In live mode, messages you send are processed by your model. Older messages may be omitted to fit its context.</p><button className="signout-button" onClick={logout}><LogOut size={16}/> Sign out</button></>}</div></div>}
   </div>;
+}
+
+function MessageMarkdown({ message }: { message: Message }) {
+  const { docsSources } = message;
+  return <ReactMarkdown remarkPlugins={docsSources ? [remarkGfm, [remarkDocsCitations, docsSources]] : [remarkGfm]}
+    components={{
+      pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+      a: ({ children, href, node }) => {
+        if (!docsSources) return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+        const source = docsSources.find(item => item.id === node?.properties.dataDocsCitation);
+        return source ? <a className="docs-citation" href={source.url} target="_blank" rel="noopener noreferrer"
+          title={source.heading} aria-label={`[${source.id}] ${source.heading}, Runpod Docs`}>{children}</a> : <>{children}</>;
+      },
+    }}>{message.content}</ReactMarkdown>;
 }
 
 function MessageAttachment({ name, attachment }: { name: string; attachment?: ImageAttachment }) {
