@@ -145,6 +145,20 @@ No database, paid chat provider, or OpenAI account is required. The app is confi
 - Live readiness checks and clear offline, loading, interrupted, and context-limit messages.
 - Conversations are stored in this browser's local storage, not synced between devices or encrypted by the app. In live mode the selected conversation history is sent through the Vercel server and Runpod gateway to your model. The app and gateway do not log prompts or replies; hosting platforms may retain operational metadata.
 
+## Ask about Runpod Docs
+
+Turn on **Runpod Docs** in the composer to search five official Runpod documentation pages about Pod storage, zero-GPU recovery, Serverless endpoints, requests, and network volumes. The server ranks sections using the newest question and sends up to three bounded excerpts to the selected model. Numbered citations open the corresponding Runpod Docs sections. If nothing matches, the app reports that directly.
+
+Runpod Docs is off by default and works with text prompts. The switch resets when you open another conversation or reload the page. Retrying an earlier question uses that question's original Docs setting. Saved answers keep their citation links.
+
+Generate the index from the existing `runpod-learning/docs-search` folder before starting the app or building it for deployment. Run this from the `qwen-chat` repository root, adjusting the path if the lesson is elsewhere.
+
+```bash
+python scripts/export-runpod-docs.py ../runpod-learning/docs-search
+```
+
+The exporter uses the lesson's Python chunker and term tokenizer. It writes an ignored file at `data/runpod-docs-index.json`, which Next.js includes in the chat and status route traces when present during `npm run build`. Keep this generated file with the server artifact. The selected gateway must advertise `docsModeVersion: 1`. A checkout without an index or a connection to an older gateway still supports ordinary chat. Regenerate the index and restart the app after changing the corpus. Run `npm test` with the generated index present to compare the five lesson queries against the Python baseline's rankings.
+
 ## Ask about an image
 
 Select **Qwen3.8-27B-bf16** and use **Attach image** to add one JPEG, PNG, or WebP to a text prompt. If **Use trained adapter** is available, switch it off to use the BF16 base model for the image request. Qwen streams a text reply through the same chat connection.

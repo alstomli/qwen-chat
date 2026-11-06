@@ -7,6 +7,8 @@ export type Connection = {
   ready: boolean; limits?: ChatSettings; error?: string; diagnosticsAvailable?: boolean;
   lastVerifiedLimits?: ChatSettings;
   adapterToggleAvailable?: boolean;
+  docsModeAvailable?: boolean;
+  docsModeUnavailable?: "gateway" | "index";
   imageInput?: ImageInputLimits;
 };
 

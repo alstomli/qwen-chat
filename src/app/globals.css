@@ -148,6 +148,40 @@
 }
 .composer-attachment-note button:hover { background: #edf1e5; }
 
+.composer-docs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0 10px;
+  margin-top: 8px;
+  color: #56624d;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.docs-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  color: var(--olive-dark);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.docs-toggle input { margin: 0; accent-color: var(--olive-dark); }
+.docs-toggle:has(input:disabled) { color: #66705d; }
+.docs-citation {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: #edf1e5;
+  color: var(--olive-dark);
+  font-size: .88em;
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.docs-citation:hover { background: #dfe8d3; }
+
 .message-attachment {
   width: fit-content;
   max-width: min(100%, 280px);
@@ -185,4 +219,5 @@
   .composer-attachment > button,
   .composer-controls .send-button { width: 44px; height: 44px; }
   .composer-attachment-note button { min-height: 44px; }
+  .docs-toggle { min-height: 44px; }
 }

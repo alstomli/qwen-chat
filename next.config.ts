@@ -3,6 +3,10 @@ const config: NextConfig = {
   distDir: process.env.CHAT_TEST_DIST_DIR ?? ".next",
   poweredByHeader: false,
   devIndicators: false,
+  outputFileTracingIncludes: {
+    "/api/chat": ["./data/runpod-docs-index.json"],
+    "/api/status": ["./data/runpod-docs-index.json"],
+  },
   async headers() {
     return [{ source: "/:path*", headers: [
       { key: "X-Content-Type-Options", value: "nosniff" },
