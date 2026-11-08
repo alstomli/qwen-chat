@@ -147,7 +147,7 @@ try {
   console.log('PASS: Cancellation releases gateway capacity; logout clears the session cookie');
   if (process.env.CHAT_TEST_PLAYWRIGHT) {
     const { checkBrowserTimings } = await import('./check-browser-timings.mjs');
-    await checkBrowserTimings(base, password);
+    await checkBrowserTimings(base, password, admissionIs);
   }
 } catch (error) {
   console.error(logs);

@@ -2,14 +2,17 @@
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 
-export async function checkBrowserTimings(base, password) {
+export async function checkBrowserTimings(base, password, admissionIs) {
   const { chromium } = await import(pathToFileURL(process.env.CHAT_TEST_PLAYWRIGHT).href);
   const browser = await chromium.launch({ headless: true, ...(process.env.CHAT_TEST_BROWSER_CHANNEL ? { channel: process.env.CHAT_TEST_BROWSER_CHANNEL } : {}) });
   try {
     const page = await browser.newPage();
+    const pageErrors = [];
+    page.on('pageerror', error => pageErrors.push(error.message));
     await page.goto(base);
     await page.getByLabel('Workspace password', { exact: true }).fill(password);
     await page.getByRole('button', { name: 'Enter workspace' }).click();
+    await page.getByRole('button', { name: 'Model online' }).waitFor();
     await page.getByRole('button', { name: 'Your workspace' }).click();
     const settings = page.locator('details.model-settings-section').filter({ hasText: 'Qwen3.8-27B-4bit' });
     await settings.locator('summary').click();
@@ -21,22 +24,19 @@ export async function checkBrowserTimings(base, password) {
       assert.match(text, /ms$/); return Number(text.replaceAll(',', '').replace(' ms', ''));
     };
     const prompt = page.getByRole('textbox', { name: /message/i });
-    await prompt.fill('Hello');
-    await page.getByRole('button', { name: 'Send message' }).click();
-    await page.getByText('Request diagnostics · completed', { exact: true }).waitFor();
-    const completed = page.locator('.request-diagnostics').last();
-    await completed.locator('summary').click();
-    await row(completed, 'first answer rendered').filter({ hasText: /ms$/ }).waitFor();
-    const received = await milliseconds(completed, 'first content received');
-    const rendered = await milliseconds(completed, 'first answer rendered');
-    const ended = await milliseconds(completed, 'response completed');
-    assert.ok(rendered >= received, 'First paint must follow receipt');
-    assert.ok(rendered < ended, 'First paint should occur while this fixture is still streaming');
-    assert.ok(await milliseconds(completed, 'Gateway context fitting') >= 0);
-    assert.ok(await milliseconds(completed, 'Upstream request') >= 0);
-    await prompt.fill('slow');
-    await page.getByRole('button', { name: 'Send message' }).click();
-    await page.getByText('Request diagnostics · streaming', { exact: true }).waitFor();
+    async function startSlowReply() {
+      await prompt.fill('slow');
+      await page.getByRole('button', { name: 'Send message' }).click();
+      await page.locator('.message.assistant').getByText(/sample/).waitFor();
+    }
+    const inProgress = page.getByRole('button', { name: 'slow Reply in progress', exact: true });
+    await startSlowReply();
+    await page.getByRole('button', { name: /New conversation/ }).click();
+    await inProgress.waitFor();
+    await startSlowReply();
+    await admissionIs(2, 0);
+    assert.equal(await inProgress.count(), 2);
+
     const stopped = page.locator('.request-diagnostics').last();
     await stopped.locator('summary').click();
     await row(stopped, 'first answer rendered').filter({ hasText: /ms$/ }).waitFor();
@@ -46,6 +46,22 @@ export async function checkBrowserTimings(base, password) {
     assert.ok(await milliseconds(stopped, 'request ended') > 0);
     assert.ok(await milliseconds(stopped, 'first content received') > 0);
     assert.equal(await row(stopped, 'Gateway entry → stream end').innerText(), 'Unavailable');
-    console.log('PASS: Real browser receives content, paints before completion, and preserves partial timing on Stop');
+
+    await admissionIs(1, 0);
+    await inProgress.click();
+    await page.getByRole('button', { name: 'Stop generation' }).waitFor();
+    await page.getByText('Request diagnostics · completed', { exact: true }).waitFor();
+    const completed = page.locator('.request-diagnostics').last();
+    await completed.locator('summary').click();
+    const received = await milliseconds(completed, 'first content received');
+    const rendered = await milliseconds(completed, 'first answer rendered');
+    const ended = await milliseconds(completed, 'response completed');
+    assert.ok(rendered >= received, 'First paint must follow receipt');
+    assert.ok(rendered < ended, 'First paint should occur while this fixture is still streaming');
+    assert.ok(await milliseconds(completed, 'Gateway context fitting') >= 0);
+    assert.ok(await milliseconds(completed, 'Upstream request') >= 0);
+    await admissionIs(0, 0);
+    assert.deepEqual(pageErrors, []);
+    console.log('PASS: Two conversations stream in one tab, Stop cancels only the selected reply, and timings stay with each reply');
   } finally { await browser.close(); }
 }
