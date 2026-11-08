@@ -3,10 +3,8 @@ import assert from 'node:assert/strict';
 const base = process.env.CHAT_ADAPTER_TEST_BASE ?? 'http://127.0.0.1:3003';
 assert.ok(['127.0.0.1', 'localhost'].includes(new URL(base).hostname), 'Use a local fixture app only');
 const headers = { Origin: base, 'Content-Type': 'application/json' };
-const login = await fetch(base + '/api/login', { method: 'POST', headers,
-  body: JSON.stringify({ password: process.env.CHAT_ADAPTER_TEST_PASSWORD ?? 'adapter-preview-only' }) });
-assert.equal(login.status, 200);
-headers.Cookie = login.headers.get('set-cookie').split(';')[0];
+assert.ok(process.env.CHAT_ADAPTER_TEST_COOKIE, 'Set CHAT_ADAPTER_TEST_COOKIE to a verified fixture account session cookie');
+headers.Cookie = process.env.CHAT_ADAPTER_TEST_COOKIE;
 const status = await (await fetch(base + '/api/status?model=bf16', { headers })).json();
 assert.equal(status.ready, true); assert.equal(status.adapterToggleAvailable, true);
 for (const enabled of [true, false, true]) {

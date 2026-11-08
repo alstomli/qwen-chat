@@ -1,31 +1,23 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-export const COOKIE = "qwen_session";
-const lifetime = 60 * 60 * 24;
-function digest(value: string) { return createHash("sha256").update(value).digest(); }
-export function credentialsConfigured() { return (process.env.CHAT_PASSWORD?.length ?? 0) > 0 && (process.env.SESSION_SECRET?.length ?? 0) >= 32; }
-export function passwordMatches(password: string) {
-  return credentialsConfigured() && timingSafeEqual(digest(password), digest(process.env.CHAT_PASSWORD!));
-}
-export function issueSession(now = Date.now()) {
-  if (!credentialsConfigured()) throw new Error("Login is not configured.");
-  const payload = Buffer.from(JSON.stringify({ exp: Math.floor(now / 1000) + lifetime, nonce: randomBytes(16).toString("hex") })).toString("base64url");
-  return payload + "." + createHmac("sha256", process.env.SESSION_SECRET!).update(payload).digest("base64url");
-}
-export function validSession(token: string | undefined, now = Date.now()) {
-  if (!token || !credentialsConfigured()) return false;
+import { createServerClient } from "@supabase/ssr";
+import { authConfig } from "./supabase/config";
+import { isVerifiedGoogleUser } from "./google-user";
+export async function requestAuthenticated(request: Request) {
+  const config = authConfig();
+  if (!config) return false;
   try {
-    const [payload, signature, extra] = token.split(".");
-    if (extra || !payload || !signature) return false;
-    const expected = createHmac("sha256", process.env.SESSION_SECRET!).update(payload).digest();
-    const actual = Buffer.from(signature, "base64url");
-    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return false;
-    const { exp } = JSON.parse(Buffer.from(payload, "base64url").toString());
-    return Number.isInteger(exp) && exp > Math.floor(now / 1000) && exp <= Math.floor(now / 1000) + lifetime;
+    const supabase = createServerClient(config.url, config.key, { cookies: {
+      getAll: () => (request.headers.get("cookie") ?? "").split(";").map(cookie => {
+        const index = cookie.indexOf("=");
+        return { name: cookie.slice(0, index).trim(), value: cookie.slice(index + 1).trim() };
+      }).filter(cookie => cookie.name),
+      // Proxy owns refresh cookies; do not share this client between requests.
+      setAll: () => {},
+    } });
+    const { data, error } = await supabase.auth.getUser();
+    if (error || !isVerifiedGoogleUser(data.user)) return false;
+    const { data: active, error: sessionError } = await supabase.rpc("chat_session_active");
+    return !sessionError && active === true;
   } catch { return false; }
-}
-export function requestAuthenticated(request: Request) {
-  const cookies = request.headers.get("cookie")?.split(";").map(s => s.trim()) ?? [];
-  return validSession(cookies.find(s => s.startsWith(COOKIE + "="))?.slice(COOKIE.length + 1));
 }
 export function sameOrigin(request: Request) {
   const origin = request.headers.get("origin");
@@ -37,17 +29,4 @@ export function sameOrigin(request: Request) {
     // The HTTP Host identifies the browser-facing destination.
     return source.host === (request.headers.get("host") ?? target.host) && source.protocol === target.protocol;
   } catch { return false; }
-}
-export function cookieHeader(token: string, remove = false) {
-  return `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${remove ? 0 : lifetime}${process.env.NODE_ENV === "production" ? "; Secure" : ""}`;
-}
-
-// Best-effort per-instance login throttling. The Pod independently limits generation.
-const attempts = new Map<string, { count: number; until: number }>();
-export function allowLogin(key: string, now = Date.now()) {
-  for (const [k, v] of attempts) if (v.until <= now) attempts.delete(k);
-  if (attempts.size >= 1000 && !attempts.has(key)) return false;
-  const entry = attempts.get(key) ?? { count: 0, until: now + 60_000 };
-  entry.count++; attempts.set(key, entry);
-  return entry.count <= 8;
 }

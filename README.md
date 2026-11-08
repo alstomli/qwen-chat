@@ -31,7 +31,7 @@ local HTTP check `node scripts/check-adapter-toggle.mjs`. The latter expects a
 local app connected to the companion backend's `chat_test_fixture.py` with
 `CHAT_FIXTURE_ADAPTER=true`; it uses a fake model and never calls the live Pod.
 The optional `CHAT_ADAPTER_TEST_BASE` defaults to `http://127.0.0.1:3003` and
-`CHAT_ADAPTER_TEST_PASSWORD` defaults to the test-only `adapter-preview-only`.
+`CHAT_ADAPTER_TEST_COOKIE` must be a verified fixture account session cookie.
 
 The header selector switches the next request between `Qwen3.8-27B-4bit` and
 `Qwen3.8-27B-bf16`. Both Pods remain running; selecting a model does not reload
@@ -123,7 +123,9 @@ cd D:\AILearn\qwen-chat
 .\start-local.cmd
 ```
 
-Then open http://127.0.0.1:3001. The password is in `.local/login.txt` and `CHAT_PASSWORD` in `.env.local`. These files are ignored and must remain private. The setup script generates them once and preserves existing credentials on subsequent runs.
+Then configure Supabase and apply the account migration using [Account setup](docs/accounts.md).
+Open http://127.0.0.1:3001 and choose **Continue with Google**. New Google users get an account automatically.
+The setup script preserves existing `.env.local`; replace legacy login settings with the Supabase public variables in `.env.example`.
 
 On another machine with Node.js 22 or newer:
 
@@ -133,7 +135,7 @@ npm run setup
 npm run dev
 ```
 
-No database, paid chat provider, or OpenAI account is required. The app is configured for your live Runpod model. For an isolated local preview, clear `RUNPOD_CHAT_URL` and set `CHAT_PREVIEW_MODE=true`; sample replies are clearly labeled and make no model requests. Stop the local server with Ctrl+C.
+Supabase Auth and Postgres are required for accounts. No OpenAI account is required. The app is configured for your live Runpod model. For an isolated local preview, clear `RUNPOD_CHAT_URL` and set `CHAT_PREVIEW_MODE=true`; sample replies are clearly labeled and make no model requests. Stop the local server with Ctrl+C.
 
 ## Included behavior
 
@@ -141,9 +143,9 @@ No database, paid chat provider, or OpenAI account is required. The app is confi
 - Multiple conversations, search, new chat, confirmed deletion, and recovery after a page reload.
 - Desktop and mobile layouts, keyboard submission, accessible labels, and reduced-motion support.
 - Persistent Advanced settings for input characters, output tokens, context tokens, history messages/bytes, request bytes, generation timeout, and safety tokens, plus adjustable creativity.
-- Personal password login, expiring signed HttpOnly sessions, same-origin mutation checks, and bounded request bodies.
+- Public Google sign-in/signup, server-verified Google identities, live Supabase sessions, same-origin mutation checks, and bounded request bodies.
 - Live readiness checks and clear offline, loading, interrupted, and context-limit messages.
-- Conversations are stored in this browser's local storage, not synced between devices or encrypted by the app. In live mode the selected conversation history is sent through the Vercel server and Runpod gateway to your model. The app and gateway do not log prompts or replies; hosting platforms may retain operational metadata.
+- Conversations are scoped per account in this browser's local storage, not synced between devices or encrypted by the app. In live mode the selected conversation history is sent through the Vercel server and Runpod gateway to your model. The app and gateway do not log prompts or replies; hosting platforms may retain operational metadata.
 
 ## Ask about Runpod Docs
 
@@ -195,18 +197,18 @@ Deploy both updated projects together. An older gateway cannot enforce these set
 
 ## Vercel deployment
 
-Import this folder as a Next.js project using a supported Node.js 22+ runtime. Add these server-side environment variables:
+Import this folder as a Next.js project using a supported Node.js 22+ runtime. Add these environment variables (the two Supabase settings are intentionally public; Runpod secrets remain server-only):
 
 | Variable | Purpose |
 | --- | --- |
-| `CHAT_PASSWORD` | A non-empty personal workspace password; no minimum length |
-| `SESSION_SECRET` | Random signing secret, at least 32 characters |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase publishable key, never secret/service-role key |
 | `RUNPOD_CHAT_URL` | HTTPS origin of the deployed chat gateway |
 | `RUNPOD_CHAT_TOKEN` | Matching separate 4bit chat gateway token |
 | `RUNPOD_BF16_CHAT_URL` | BF16 gateway HTTPS origin |
 | `RUNPOD_BF16_CHAT_TOKEN` | Matching separate BF16 chat gateway token |
 
-Never use `NEXT_PUBLIC_` for credentials. Local preview is forcibly disabled in production, even if `CHAT_PREVIEW_MODE=true`; missing gateway configuration returns an honest setup/unavailable response. The chat route declares a 300-second maximum execution time for Vercel Hobby compatibility. This includes validation, waiting for the model, and streaming the reply. The configurable generation timeout can be longer locally, but it does not override Vercel’s execution limit; on Vercel, choose a timeout below 300 seconds. Login throttling is best-effort per server instance; it is not a distributed account lockout. Add centralized rate limiting and proper user accounts before opening the app to multiple people.
+Never use `NEXT_PUBLIC_` for secret credentials. Local preview is forcibly disabled in production, even if `CHAT_PREVIEW_MODE=true`; missing gateway configuration returns an honest setup/unavailable response. The chat route declares a 300-second maximum execution time for Vercel Hobby compatibility. This includes validation, waiting for the model, and streaming the reply. The configurable generation timeout can be longer locally, but it does not override Vercel’s execution limit; on Vercel, choose a timeout below 300 seconds. Supabase handles authentication rate limits. Complete the migration, Google OAuth provider, disabled email/password and anonymous sign-in, and callback allowlist configuration in [Account setup](docs/accounts.md) before production cutover.
 
 The hosted frontend uses its configured Vercel environment and is linked to `main`; merging changes there triggers a deployment. The two model engines and authenticated gateways run on their separate Runpod Pods. Updating server-side connection variables requires a new frontend deployment.
 

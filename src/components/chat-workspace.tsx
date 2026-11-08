@@ -15,6 +15,8 @@ import { IMAGE_ACCEPTED_HEADER, IMAGE_ADAPTER_ERROR, validateImageInput } from "
 import { prepareImage, type ImageAttachment } from "@/lib/prepare-image";
 import { completedHistory, parseConversations, STORAGE_KEY, type Conversation, type Message } from "@/lib/storage";
 
+import { browserAuth } from "@/lib/supabase/browser";
+import { accountStorageKey } from "@/lib/account-storage";
 import { DEFAULT_MODEL, MODELS, modelInfo, answerModelLabel, type ModelId } from "@/lib/models";
 import { allModelStatusRequests, initialModelConnections, updateModelConnection } from "@/lib/model-status";
 const starters = [
@@ -25,9 +27,11 @@ const starters = [
 const uid = () => crypto.randomUUID();
 const logo = <span className="qwen-symbol" aria-hidden="true">✳</span>;
 
-export default function ChatWorkspace({ initialAuthenticated, loginConfigured }: { initialAuthenticated: boolean; loginConfigured: boolean }) {
-  const [authenticated, setAuthenticated] = useState(initialAuthenticated);
-  const [password, setPassword] = useState(""); const [loginError, setLoginError] = useState(""); const [signingIn, setSigningIn] = useState(false);
+export default function ChatWorkspace({ userId, email }: { userId: string; email: string }) {
+  const [authenticated, setAuthenticated] = useState(true);
+  const storageKey = accountStorageKey(STORAGE_KEY, userId);
+  const settingsKey = accountStorageKey(SETTINGS_KEY, userId);
+  const modelSettingsKey = accountStorageKey(MODEL_SETTINGS_KEY, userId);
   const [chats, setChats] = useState<Conversation[]>([]); const [loaded, setLoaded] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null); const [draft, setDraft] = useState(""); const [search, setSearch] = useState("");
   const [attachment, setAttachment] = useState<ImageAttachment | null>(null);
@@ -86,11 +90,11 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
 
   useEffect(() => {
     if (!authenticated) return;
-    try { const stored = parseConversations(localStorage.getItem(STORAGE_KEY)); setChats(stored); setActiveId(stored[0]?.id ?? null); setDocsMode(false); setDiagnosticRecords([]); setDiagnosticsEnabled({ "4bit": false, bf16: false }); }
+    try { const stored = parseConversations(localStorage.getItem(storageKey)); setChats(stored); setActiveId(stored[0]?.id ?? null); setDocsMode(false); setDiagnosticRecords([]); setDiagnosticsEnabled({ "4bit": false, bf16: false }); }
     catch { setToast("Your browser couldn't load saved conversations."); }
     try {
-      const raw = localStorage.getItem(SETTINGS_KEY);
-      setPreferences(parseModelSettings(localStorage.getItem(MODEL_SETTINGS_KEY), raw));
+      const raw = localStorage.getItem(settingsKey);
+      setPreferences(parseModelSettings(localStorage.getItem(modelSettingsKey), raw));
       const temperature = JSON.parse(raw ?? "null")?.temperature;
       if (typeof temperature === "number" && Number.isFinite(temperature) && temperature >= 0 && temperature <= 1.5) setTemperature(temperature);
     } catch { setToast("Your browser couldn't load saved settings."); }
@@ -98,12 +102,12 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   }, [authenticated]);
   useEffect(() => {
     if (!loaded || !authenticated) return;
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(chats)); }
+    try { localStorage.setItem(storageKey, JSON.stringify(chats)); }
     catch { setToast("Browser storage is full. This conversation will only be available in this tab."); }
   }, [chats, loaded, authenticated]);
   useEffect(() => {
     if (!loaded || !authenticated) return;
-    try { localStorage.setItem(MODEL_SETTINGS_KEY, JSON.stringify(preferences)); localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...preferences["4bit"], temperature })); }
+    try { localStorage.setItem(modelSettingsKey, JSON.stringify(preferences)); localStorage.setItem(settingsKey, JSON.stringify({ ...preferences["4bit"], temperature })); }
     catch { setToast("Your browser couldn't save settings. They will only apply in this tab."); }
   }, [preferences, temperature, loaded, authenticated]);
   useEffect(() => {
@@ -137,15 +141,6 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     return () => { for (const request of requests.values()) request.abort(); };
   }, [authenticated]);
 
-  async function login(event: FormEvent) {
-    event.preventDefault(); setSigningIn(true); setLoginError("");
-    try {
-      const response = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) });
-      if (!response.ok) throw new Error((await response.json()).error);
-      setPassword(""); setAuthenticated(true);
-    } catch (error) { setLoginError(error instanceof Error ? error.message : "Couldn't sign in. Try again."); }
-    finally { setSigningIn(false); }
-  }
   function clearDraft() {
     removeAttachment();
     setDraft(""); setRetryImageId(null);
@@ -335,9 +330,23 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
   }
   async function logout() {
     for (const request of controllers.current.values()) request.abort();
-    try { const res = await fetch("/api/logout", { method: "POST" }); if (!res.ok) throw new Error(); clearDraft(); sentImages.current.clear(); savedDrafts.current.clear(); setAuthenticated(false); setSettings(false); setLoaded(false); setChats([]); setDiagnosticRecords([]); setDiagnosticsEnabled({ "4bit": false, bf16: false }); setActiveId(null); }
-    catch { setToast("Couldn't sign out. Please try again."); }
+    const { error } = await browserAuth().auth.signOut({ scope: "local" });
+    if (error) { setToast("Couldn't sign out. Please try again."); return; }
+    setAuthenticated(false);
   }
+  useEffect(() => {
+    const { data: { subscription } } = browserAuth().auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT" || (event === "INITIAL_SESSION" && !session) || (session && (session.user.id !== userId || !session.user.email_confirmed_at))) setAuthenticated(false);
+    });
+    return () => subscription.unsubscribe();
+  }, [userId]);
+  useEffect(() => {
+    if (authenticated) return;
+    for (const request of controllers.current.values()) request.abort();
+    sentImages.current.clear(); savedDrafts.current.clear(); imageRead.current++;
+    setChats([]); setLoaded(false); setDraft(""); setAttachment(null); setDiagnosticRecords([]);
+    window.location.replace("/sign-in");
+  }, [authenticated]);
   function trapFocus(event: React.KeyboardEvent) {
     if (event.key !== "Tab") return;
     const items = dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href]'); if (!items?.length) return;
@@ -346,14 +355,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   }
 
-  if (!authenticated) return <div className="login-page">
-    <div className="login-brand">{logo}<span>qwen<span className="brand-dot">.</span></span></div>
-    <main className="login-main"><div className="eyebrow"><span className="tiny-line"/> YOUR PERSONAL WORKSPACE</div><h1>A space for<br/><em>your next thought.</em></h1><p>Welcome back. Make yourself at home.</p>
-      <form onSubmit={login} className="login-form"><label htmlFor="workspace-password">Workspace password</label><input id="workspace-password" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter your password" required autoFocus disabled={!loginConfigured}/>{loginError && <p className="form-error" role="alert">{loginError}</p>}{!loginConfigured && <p className="form-error">Workspace login needs to be configured before you can sign in.</p>}<button className="primary-button" disabled={signingIn || !loginConfigured}>{signingIn ? <LoaderCircle size={18} className="spin"/> : <>Enter workspace <ArrowUpRight size={18}/></>}</button></form>
-      <div className="login-note"><ShieldCheck size={15}/> Just you and your ideas.</div>
-    </main><footer className="login-footer">A little curiosity goes a long way.<span>POWERED BY QWEN</span></footer>
-    <div className="login-art" aria-hidden="true"><div className="orbit orbit-one"/><div className="orbit orbit-two"/><div className="orbit orbit-three"/><span>✳</span><i className="orbit-dot"/></div>
-  </div>;
+  if (!authenticated) return <div className="login-page"><p>Returning to sign in...</p><a href="/sign-in">Sign in</a></div>;
 
   return <div className="workspace">
     {sidebar && <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebar(false)}/>}
@@ -363,7 +365,7 @@ export default function ChatWorkspace({ initialAuthenticated, loginConfigured }:
       <div className="search-chats"><Search size={15}/><input ref={searchInput} aria-label="Search conversations" placeholder="Search conversations" value={search} onChange={e => setSearch(e.target.value)}/><kbd>⌘ K</kbd></div>
       <div className="history-heading">YOUR CONVERSATIONS<span>{chats.length.toString().padStart(2, "0")}</span></div>
       <div className="history-list">{chats.filter(c => c.title.toLowerCase().includes(search.toLowerCase())).map(chat => <div className={`history-item ${chat.id === activeId ? "active" : ""}`} key={chat.id}><button className="history-link" onClick={() => switchConversation(chat.id)}>{streamingChats.has(chat.id) ? <LoaderCircle size={15} className="spin" aria-hidden="true"/> : <MessageSquare size={15}/>}<span>{chat.title}</span>{streamingChats.has(chat.id) && <span className="sr-only">Reply in progress</span>}</button><button className="delete-chat" aria-label={`Delete ${chat.title}`} onClick={() => setDeleting(chat.id)}><Trash2 size={14}/></button></div>)}{!chats.length && <div className="empty-history"><MessageSquare size={23} strokeWidth={1.3}/><p>Good conversations<br/>start with a little curiosity.</p><span>Your chats will appear here.</span></div>}{chats.length > 0 && !chats.some(c => c.title.toLowerCase().includes(search.toLowerCase())) && <p className="no-results">No conversations found.</p>}</div>
-      <div className="sidebar-bottom"><div className="private-note"><ShieldCheck size={15}/><span>Saved only in this browser</span></div><button className="profile-button" onClick={() => setSettings(true)}><span className="avatar">Z</span><span><strong>Your workspace</strong><small>Personal account</small></span><Settings2 size={17}/></button></div>
+      <div className="sidebar-bottom"><div className="private-note"><ShieldCheck size={15}/><span>Saved only in this browser</span></div><button className="profile-button" onClick={() => setSettings(true)}><span className="avatar">{email[0]?.toUpperCase()}</span><span><strong>Your workspace</strong><small>{email}</small></span><Settings2 size={17}/></button></div>
     </aside>
     <div className="main-shell">
       <header className="workspace-header"><div className="workspace-heading"><button className="icon-button mobile-only" onClick={() => setSidebar(true)} aria-label="Open sidebar"><Menu size={20}/></button><span className="header-label">Personal workspace</span><span className="header-slash">/</span><label className="model-picker"><span className="sr-only">Model</span><select aria-label="Model" value={selectedModel} disabled={busy} onChange={e => selectModel(e.target.value as ModelId)}>{MODELS.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}</select><ChevronDown size={14} aria-hidden="true"/></label></div><button className={`connection-pill ${connection.mode === "live" && connection.ready ? "online" : preview ? "preview" : "offline"}`} onClick={() => setSettings(true)}><span/>{preview ? "Local preview" : connection.mode === "checking" ? "Connecting" : connection.mode === "unconfigured" ? "Setup needed" : connection.ready ? "Model online" : "Model offline"}<ArrowUpRight size={13}/></button></header>

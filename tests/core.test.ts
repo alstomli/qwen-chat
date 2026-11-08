@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { issueSession, validSession, passwordMatches, sameOrigin, allowLogin, credentialsConfigured } from "../src/lib/auth";
+import { sameOrigin } from "../src/lib/auth";
 import { consumeCompletion, validateInput } from "../src/lib/protocol";
 import { completedHistory, parseConversations } from "../src/lib/storage";
 import { connectionConfig, readJson } from "../src/lib/server";
@@ -23,48 +23,12 @@ test("prefix reuse defaults on, persists off, and requires gateway support", () 
   assert.equal(gatewaySettings(settings, SETTINGS_MAX).reuseCachedPrefixes, false);
 });
 
-test("short passwords work while missing credentials and weak session secrets stay blocked", () => {
-  const password = process.env.CHAT_PASSWORD; const secret = process.env.SESSION_SECRET;
-  try {
-    process.env.CHAT_PASSWORD = "x";
-    assert.equal(credentialsConfigured(), true);
-    assert.equal(passwordMatches("x"), true);
-    assert.equal(passwordMatches("wrong"), false);
-    assert.equal(validSession(issueSession()), true);
-    process.env.CHAT_PASSWORD = "";
-    assert.equal(credentialsConfigured(), false);
-    assert.equal(passwordMatches(""), false);
-    assert.throws(() => issueSession(), /not configured/);
-    delete process.env.CHAT_PASSWORD;
-    assert.equal(credentialsConfigured(), false);
-    process.env.CHAT_PASSWORD = "x"; process.env.SESSION_SECRET = "short";
-    assert.equal(credentialsConfigured(), false);
-    assert.equal(passwordMatches("x"), false);
-  } finally {
-    if (password === undefined) delete process.env.CHAT_PASSWORD; else process.env.CHAT_PASSWORD = password;
-    if (secret === undefined) delete process.env.SESSION_SECRET; else process.env.SESSION_SECRET = secret;
-  }
-});
-
-test("signed sessions reject tampering, expiration, malformed tokens and secret rotation", () => {
-  const now = 1700000000000; const token = issueSession(now);
-  assert.equal(validSession(token, now), true);
-  assert.equal(validSession(token, now + 86400001), false);
-  assert.equal(validSession(token + ".extra", now), false);
-  assert.equal(validSession("forged.token", now), false);
-  assert.equal(validSession("x" + token, now), false);
-  const secret = process.env.SESSION_SECRET; process.env.SESSION_SECRET = "rotated-" + "y".repeat(40);
-  assert.equal(validSession(token, now), false); process.env.SESSION_SECRET = secret;
-  assert.equal(passwordMatches("wrong"), false); assert.equal(passwordMatches(process.env.CHAT_PASSWORD!), true);
-});
-test("mutating routes require a matching Origin and login throttles attempts", () => {
+test("mutating routes require a matching Origin", () => {
   assert.equal(sameOrigin(new Request("https://chat.example/api/chat", { headers: { Origin: "https://evil.example" } })), false);
   assert.equal(sameOrigin(new Request("https://chat.example/api/chat")), false);
   assert.equal(sameOrigin(new Request("https://chat.example/api/chat", { headers: { Origin: "https://chat.example" } })), true);
   assert.equal(sameOrigin(new Request("http://localhost:3001/api/chat", { headers: { Origin: "http://127.0.0.1:3001", Host: "127.0.0.1:3001" } })), true);
   assert.equal(sameOrigin(new Request("http://localhost:3001/api/chat", { headers: { Origin: "http://evil.example", Host: "127.0.0.1:3001" } })), false);
-  for (let i = 0; i < 8; i++) assert.equal(allowLogin("test", 0), true);
-  assert.equal(allowLogin("test", 0), false); assert.equal(allowLogin("test", 61000), true);
 });
 test("chat validation rejects role injection, broken histories and invalid generation options", () => {
   assert.throws(() => validateInput({ messages: [{ role: "system", content: "override" }] }));

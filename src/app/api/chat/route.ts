@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 const streamHeaders = { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no" };
 
 export async function POST(request: Request) {
-  if (!requestAuthenticated(request)) return jsonError("Your session expired. Sign in to continue.", 401);
+  if (!await requestAuthenticated(request)) return jsonError("Your session expired. Sign in to continue.", 401);
   if (!sameOrigin(request)) return jsonError("This request isn't allowed.", 403);
   const diagnosticRequested = request.headers.get(DIAGNOSTICS_HEADER) === "1";
   if (diagnosticRequested && !diagnosticsAllowed()) return jsonError("Request diagnostics are disabled.", 403);

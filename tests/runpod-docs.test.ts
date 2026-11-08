@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
 import { POST } from "../src/app/api/chat/route";
 import { GET } from "../src/app/api/status/route";
-import { cookieHeader, issueSession } from "../src/lib/auth";
+import { cookieHeader, issueSession, authResponse } from "./auth-fixture";
 import { DEFAULT_SETTINGS, SETTINGS_MAX } from "../src/lib/chat-settings";
 import { remarkDocsCitations } from "../src/lib/docs-citations";
 import { DOCS_MODE_HEADER, DOCS_SOURCES_HEADER, parseDocsSources, parseDocsSourcesHeader, sectionDocsUrl } from "../src/lib/docs-sources";
@@ -40,6 +40,7 @@ test("the Docs route checks capability, owns retrieval and citations, and preser
   let docsAcknowledged = true;
   const completions: Record<string, unknown>[] = [];
   context.mock.method(globalThis, "fetch", async (...[input, init]: Parameters<typeof fetch>) => {
+    const auth = authResponse(input, init); if (auth) return auth;
     if (String(input).endsWith("/health")) return Response.json({ ready: true, model: "qwen", settingsVersion: 1,
       limits: SETTINGS_MAX, docsModeVersion: docsVersion });
     completions.push(JSON.parse(String(init?.body)));
