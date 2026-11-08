@@ -14,8 +14,9 @@ export async function checkBrowserTimings(base, password, admissionIs) {
     await page.getByRole('button', { name: 'Enter workspace' }).click();
     await page.getByRole('button', { name: 'Model online' }).waitFor();
     await page.getByRole('button', { name: 'Your workspace' }).click();
-    await page.locator('.model-settings-section summary').filter({ hasText: 'Qwen3.8-27B-4bit' }).click();
-    await page.getByRole('switch', { name: 'Request diagnostics', exact: true }).check();
+    const settings = page.locator('details.model-settings-section').filter({ hasText: 'Qwen3.8-27B-4bit' });
+    await settings.locator('summary').click();
+    await settings.getByRole('switch', { name: 'Request diagnostics', exact: true }).check();
     await page.getByRole('button', { name: 'Close dialog' }).click();
     const row = (record, label) => record.locator('dl > div').filter({ has: page.locator('dt', { hasText: label }) }).locator('dd');
     const milliseconds = async (record, label) => {

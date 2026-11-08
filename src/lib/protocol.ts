@@ -1,8 +1,10 @@
 import { validateSettings, jsonBytes, type ChatSettings } from "./chat-settings";
 import { parseUsage, parseTimingEvent, type GatewayTimingEvent, type TokenUsage } from "./diagnostics";
 import { parseModelId, type ModelId } from "./models";
+import { IMAGE_ADAPTER_ERROR, IMAGE_UNSUPPORTED_ERROR, validateImageInput } from "./image-input";
+import { DOCS_IMAGE_ERROR } from "./docs-sources";
 export type ChatMessage = { role: "user" | "assistant"; content: string };
-export type ChatInput = { model: ModelId; useAdapter?: boolean; messages: ChatMessage[]; max_tokens: number; temperature: number; settings: ChatSettings };
+export type ChatInput = { model: ModelId; useAdapter?: boolean; messages: ChatMessage[]; max_tokens: number; temperature: number; settings: ChatSettings; image?: string; docsMode?: true };
 
 export function validateInput(value: unknown): ChatInput {
   if (!value || typeof value !== "object") throw new Error("Please send a message.");
@@ -11,6 +13,14 @@ export function validateInput(value: unknown): ChatInput {
   if (data.useAdapter !== undefined && (model !== "bf16" || typeof data.useAdapter !== "boolean"))
     throw new Error("Adapter selection must be a boolean for the BF16 model.");
   const useAdapter = data.useAdapter as boolean | undefined;
+  if (data.docsMode !== undefined && typeof data.docsMode !== "boolean") throw new Error("Runpod Docs mode must be on or off.");
+  let image: string | undefined;
+  if (data.image !== undefined) {
+    if (data.docsMode === true) throw new Error(DOCS_IMAGE_ERROR);
+    if (model !== "bf16") throw new Error(IMAGE_UNSUPPORTED_ERROR);
+    if (useAdapter === true) throw new Error(IMAGE_ADAPTER_ERROR);
+    image = validateImageInput(data.image);
+  }
   if (!Array.isArray(data.messages) || !data.messages.length || data.messages.length > 800)
     throw new Error("Start a new conversation or send fewer messages.");
   const messages = data.messages.map((item: unknown, index: number): ChatMessage => {
@@ -33,7 +43,9 @@ export function validateInput(value: unknown): ChatInput {
   validateSettings(settings);
   if (messages.at(-1)!.content.length > settings.inputCharacters) throw new Error("Input character limit exceeded.");
   if (messages.length > settings.historyMessages || jsonBytes(messages) > settings.historyBytes) throw new Error("History limit exceeded.");
-  const input = { model, ...(useAdapter === undefined ? {} : { useAdapter }), messages, max_tokens, temperature, settings };
+  const input: ChatInput = { model, ...(useAdapter === undefined ? {} : { useAdapter }), messages, max_tokens, temperature, settings,
+    ...(data.docsMode === true ? { docsMode: true } : {}),
+    ...(image === undefined ? {} : { image }) };
   if (jsonBytes({ ...input, stream: true }) > settings.requestBytes) throw new Error("Request byte limit exceeded.");
   return input;
 }

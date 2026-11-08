@@ -145,6 +145,26 @@ No database, paid chat provider, or OpenAI account is required. The app is confi
 - Live readiness checks and clear offline, loading, interrupted, and context-limit messages.
 - Conversations are stored in this browser's local storage, not synced between devices or encrypted by the app. In live mode the selected conversation history is sent through the Vercel server and Runpod gateway to your model. The app and gateway do not log prompts or replies; hosting platforms may retain operational metadata.
 
+## Ask about Runpod Docs
+
+Turn on **Runpod Docs** in the composer to search five official Runpod documentation pages about Pod storage, zero-GPU recovery, Serverless endpoints, requests, and network volumes. The server ranks sections using the newest question and sends up to three bounded excerpts to the selected model. Numbered citations open the corresponding Runpod Docs sections. If nothing matches, the app reports that directly.
+
+Runpod Docs is off by default and works with text prompts. The switch resets when you open another conversation or reload the page. Retrying an earlier question uses that question's original Docs setting. Saved answers keep their citation links.
+
+Generate the index from the existing `runpod-learning/docs-search` folder before starting the app or building it for deployment. Run this from the `qwen-chat` repository root, adjusting the path if the lesson is elsewhere.
+
+```bash
+python scripts/export-runpod-docs.py ../runpod-learning/docs-search
+```
+
+The exporter uses the lesson's Python chunker and term tokenizer. It writes an ignored file at `data/runpod-docs-index.json`, which Next.js includes in the chat and status route traces when present during `npm run build`. Keep this generated file with the server artifact. The selected gateway must advertise `docsModeVersion: 1`. A checkout without an index or a connection to an older gateway still supports ordinary chat. Regenerate the index and restart the app after changing the corpus. Run `npm test` with the generated index present to compare the five lesson queries against the Python baseline's rankings.
+
+## Ask about an image
+
+Select **Qwen3.8-27B-bf16** and use **Attach image** to add one JPEG, PNG, or WebP to a text prompt. If **Use trained adapter** is available, switch it off to use the BF16 base model for the image request. Qwen streams a text reply through the same chat connection.
+
+The attachment control is available when the connected BF16 gateway advertises image input. The uploaded image shares the request byte budget with the text. The app keeps recent image bytes in the open tab for retry, and the saved conversation retains an attachment marker. Reattach the file to retry after a reload or to ask another question about the same image.
+
 ## Live model connection
 
 The configured flow is:
@@ -205,6 +225,8 @@ node scripts/integration.mjs
 
 The integration check requires Docker and the sibling inference project. It creates a disposable local gateway container and a separate Next.js process on port 3002, tests real HTTP streaming and cancellation, then removes both. The model in that check is a controlled fixture, not the live GPU model.
 
+For the image attachment check, set `CHAT_TEST_IMAGE_INPUT=true` and `CHAT_TEST_FIXTURE_PYTHON` to a local Python interpreter with FastAPI, HTTPX, Uvicorn, and Pillow installed. `CHAT_TEST_FIXTURE_ROOT` can point to an inference worktree with image input support. Set `CHAT_TEST_PLAYWRIGHT` to the path of an installed Playwright `index.mjs` to also exercise the browser composer.
+
 From `../llm-inference-server`, build the local image and run the Python checks without a GPU:
 
 ```powershell
@@ -237,10 +259,10 @@ Gateway durations arrive in a named `chat-timing` SSE event at stream end, and a
 
 Start with the [manual pilot worksheet](docs/responsiveness-pilot.md). Deploy the gateway change and frontend through their usual release processes to collect both layers against the live model; the local fixture only verifies instrumentation.
 
-For optional real-browser assertions during `node scripts/integration.mjs`, set `CHAT_TEST_PLAYWRIGHT` to the absolute path of an installed Playwright `index.mjs`. Use its installed Chromium, or set `CHAT_TEST_BROWSER_CHANNEL=msedge` (or `chrome`) for an existing browser. The isolated headless browser signs in only to the local fake-model test app, verifies that first render follows content and precedes completion, and checks partial timing after Stop. No browser package is needed for the default HTTP integration test.
+For optional real-browser assertions during `node scripts/integration.mjs`, set `CHAT_TEST_PLAYWRIGHT` to the absolute path of an installed Playwright `index.mjs`. Use its installed Chromium, or set `CHAT_TEST_BROWSER_CHANNEL=msedge` (or `chrome`) for an existing browser. The isolated headless browser signs in only to the local fake-model test app, verifies that two conversations stream together, Stop cancels only the selected reply, the other reply completes, and timing records stay with their replies. No browser package is needed for the default HTTP integration test.
 
 ## Concurrent requests and waiting
 
-Different users or browser tabs can submit while the updated gateway is busy: two requests are active and up to six more wait in arrival order. The current tab still permits one active send. Stop or disconnect cancels a queued request and frees its waiting slot. The configured timeout includes waiting; a proxy timeout before response headers reports that the model did not start a reply in time. Hosting limits, including the declared 300-second Vercel route limit, still apply. Gateway admission is in-memory, and queued requests are lost on a gateway restart. The new `X-Chat-Rejection` reasons provide queue-full, rate-limit, and queue-timeout messages; older gateways retain the existing generic busy message. No prompts or raw gateway error bodies are copied into these errors.
+Different users or browser tabs can submit while the updated gateway is busy: two requests are active and up to six more wait in arrival order. Each conversation permits one active reply, and different conversations in the same browser tab can stream independently. Opening a new conversation or switching conversations keeps background replies running. Stop and Delete cancel only that conversation; signing out or closing the workspace cancels all its requests. Cancelling a queued request frees its waiting slot. The configured timeout includes waiting; a proxy timeout before response headers reports that the model did not start a reply in time. Hosting limits, including the declared 300-second Vercel route limit, still apply. Gateway admission is in-memory, and queued requests are lost on a gateway restart. The new `X-Chat-Rejection` reasons provide queue-full, rate-limit, and queue-timeout messages; older gateways retain the existing generic busy message. No prompts or raw gateway error bodies are copied into these errors.
 
 The integration test checks two live HTTP streams, six waiting requests, overflow, queued disconnect/timeout cleanup and successful requests after cleanup using a fake model. This does not benchmark the GPU. Deploy the updated backend and frontend through their normal release processes after approval; set `MAX_NUM_SEQS=2` explicitly on the Pod and verify real concurrent generation and KV-cache pressure.

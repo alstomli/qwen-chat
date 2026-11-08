@@ -1,11 +1,15 @@
 import type { ChatSettings } from "./chat-settings";
 import { MODELS, type ModelId } from "./models";
+import type { ImageInputLimits } from "./image-input";
 
 export type Connection = {
   model: ModelId; mode: "checking" | "live" | "preview" | "unconfigured";
   ready: boolean; limits?: ChatSettings; error?: string; diagnosticsAvailable?: boolean;
   lastVerifiedLimits?: ChatSettings;
   adapterToggleAvailable?: boolean;
+  docsModeAvailable?: boolean;
+  docsModeUnavailable?: "gateway" | "index";
+  imageInput?: ImageInputLimits;
 };
 
 export type ModelConnections = Record<ModelId, Connection>;

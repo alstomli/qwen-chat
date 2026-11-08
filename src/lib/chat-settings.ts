@@ -100,11 +100,19 @@ export function gatewaySettings(settings: ChatSettings, limits: ChatSettings): O
   return limits.reuseCachedPrefixes ? settings : numeric;
 }
 
-export function fitMessages<T extends { role: string; content: string }>(messages: T[], settings: ChatSettings, temperature: number, model: ModelId = DEFAULT_MODEL, useAdapter?: boolean): T[] {
+export function fitMessages<T extends { role: string; content: string }>(
+  messages: T[], settings: ChatSettings, temperature: number, model: ModelId = DEFAULT_MODEL, useAdapter?: boolean, image?: string, docsMode?: true,
+): T[] {
   const result = [...messages];
-  const oversized = () => result.length > settings.historyMessages || jsonBytes(result) > settings.historyBytes ||
-    jsonBytes({ model, useAdapter, messages: result, max_tokens: settings.outputTokens, temperature, settings, stream: true }) > settings.requestBytes;
+  const requestOverhead = jsonBytes({ model, useAdapter, messages: [], max_tokens: settings.outputTokens, temperature, settings, image, docsMode, stream: true }) - 2;
+  const oversized = () => {
+    if (result.length > settings.historyMessages) return true;
+    const bytes = jsonBytes(result);
+    return bytes > settings.historyBytes || requestOverhead + bytes > settings.requestBytes;
+  };
   while (result.length > 1 && oversized()) result.splice(0, 2);
-  if (oversized()) throw new Error("Your newest message exceeds the history or request byte limit. Raise the limit or shorten the message.");
+  if (oversized()) throw new Error(image
+    ? "Your prompt and image exceed the history or request byte limit. Try a smaller image, shorten the prompt, or raise the limit."
+    : "Your newest message exceeds the history or request byte limit. Raise the limit or shorten the message.");
   return result;
 }
