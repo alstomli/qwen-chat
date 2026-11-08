@@ -2,7 +2,9 @@
 
 This release replaces the shared workspace password with Google sign-in through
 Supabase. Anyone with an eligible Google account may register by continuing with
-Google. Only a server-verified user with a confirmed email, a matching verified
+Google while the 100-account registration limit has capacity. Existing users can
+still sign in when full, and deleting an account frees a slot. Only a
+server-verified user with a confirmed email, a matching verified
 Google identity, and a live Supabase session may use chat/status APIs. Public
 registration grants access to existing model capacity; retain gateway admission
 limits and configure Supabase authentication rate limits before launch.
@@ -83,12 +85,17 @@ and diagnostics. Remote requests already accepted may finish. Google account
 recovery is managed by Google. Old signup, confirmation, and password reset
 routes redirect to sign-in and do not exchange email tokens or update passwords.
 
-Conversations and settings remain browser-local, keyed by immutable user ID.
-They are not cloud-synced or encrypted against someone inspecting the same browser
-profile, and signout retains saved history there. Legacy anonymous localStorage
-keys remain preserved but are never automatically claimed/displayed by a newly
-signed-in account. Old `qwen_session` cookies and `CHAT_PASSWORD` /
-`SESSION_SECRET` no longer authorize any request.
+New conversations sync through the cloud-history migration and authenticated RPCs.
+Each account retains at most 50 conversations or 2,000,000 UTF-8 bytes of serialized
+content and metadata, with oldest-message conversations evicted on quota pressure.
+Existing account-scoped browser history remains local, including when continued;
+there is no automatic import. Settings and pending saves remain account-scoped in
+the browser. Browser storage is not encrypted against someone inspecting the same
+browser profile, and signout can retain saved data there. Legacy anonymous keys
+are preserved but never automatically claimed/displayed by a signed-in account.
+Old `qwen_session` cookies and `CHAT_PASSWORD` / `SESSION_SECRET` no longer
+authorize any request. See [Cloud history operations](cloud-history-operations.md)
+for migration order, capacity enforcement, storage guards, and release checks.
 
 ## Verification and release
 

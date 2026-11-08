@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { serverAuth } from "@/lib/supabase/server";
 import { isVerifiedGoogleUser } from "@/lib/google-user";
+import { registrationAvailable } from "@/lib/registration";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -10,7 +11,9 @@ export async function GET(request: Request) {
     headers: { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" },
   });
   const code = url.searchParams.get("code");
-  if (url.searchParams.has("error")) return destination(url.searchParams.get("error") === "access_denied" ? "/sign-in?error=canceled" : "/sign-in?error=google");
+  const failedDestination = async () => destination(await registrationAvailable() === false ? "/sign-in?error=capacity" : "/sign-in?error=google");
+  if (url.searchParams.has("error")) return url.searchParams.get("error") === "access_denied"
+    ? destination("/sign-in?error=canceled") : failedDestination();
   if (!code) return destination("/sign-in?error=google");
   try {
     const supabase = await serverAuth();
@@ -24,5 +27,5 @@ export async function GET(request: Request) {
     }
   } catch { /* Failed exchanges and auth outages return a retryable local page. */ }
   // No caller-controlled next URL or provider error text is reflected.
-  return destination("/sign-in?error=google");
+  return failedDestination();
 }

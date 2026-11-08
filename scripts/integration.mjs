@@ -150,6 +150,10 @@ try {
   if (process.env.CHAT_TEST_PLAYWRIGHT) {
     const { checkAccounts } = await import('./check-accounts.mjs');
     await checkAccounts(base, authFixture, admissionIs);
+    // Earlier protocol checks intentionally exhaust the gateway's global rate window.
+    await sleep(60_000);
+    const { checkCloudHistory } = await import('./check-cloud-history.mjs');
+    await checkCloudHistory(base, authFixture);
     // Protocol/account checks share the real gateway's global 60-second rate window.
     // Let that window expire before the independent concurrent-stream UI check.
     await sleep(60_000);
