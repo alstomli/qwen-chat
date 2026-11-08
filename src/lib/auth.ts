@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { authConfig } from "./supabase/config";
+import { isVerifiedGoogleUser } from "./google-user";
 export async function requestAuthenticated(request: Request) {
   const config = authConfig();
   if (!config) return false;
@@ -13,7 +14,7 @@ export async function requestAuthenticated(request: Request) {
       setAll: () => {},
     } });
     const { data, error } = await supabase.auth.getUser();
-    if (error || !data.user?.email_confirmed_at) return false;
+    if (error || !isVerifiedGoogleUser(data.user)) return false;
     const { data: active, error: sessionError } = await supabase.rpc("chat_session_active");
     return !sessionError && active === true;
   } catch { return false; }

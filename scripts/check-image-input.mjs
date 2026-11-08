@@ -15,7 +15,7 @@ async function readStream(response) {
   return events.map(line => JSON.parse(line.slice(6)));
 }
 
-export async function checkImageInput({ base, gateway, token, headers, password }) {
+export async function checkImageInput({ base, gateway, token, headers, authFixture }) {
   const get = path => fetch(base + path, { headers, signal: AbortSignal.timeout(10_000) });
   const post = (url, body, requestHeaders) => fetch(url, {
     method: 'POST', headers: requestHeaders, body: JSON.stringify(body), signal: AbortSignal.timeout(15_000),
@@ -62,19 +62,18 @@ export async function checkImageInput({ base, gateway, token, headers, password 
   assert.equal(gatewayRejection.headers.get(imageHeader), null);
   console.log('PASS: BF16 vision capability, multimodal tokenizer/generation parity, SSE confirmation, text-only adapter path, and invalid image rejection');
 
-  if (process.env.CHAT_TEST_PLAYWRIGHT) await checkBrowser(base, password);
+  if (process.env.CHAT_TEST_PLAYWRIGHT) await checkBrowser(base, authFixture);
 }
 
-async function checkBrowser(base, password) {
+async function checkBrowser(base, authFixture) {
   const { chromium } = await import(pathToFileURL(process.env.CHAT_TEST_PLAYWRIGHT).href);
   const browser = await chromium.launch({ headless: true, channel: process.env.CHAT_TEST_BROWSER_CHANNEL });
   try {
     const page = await browser.newPage();
     page.setDefaultTimeout(15_000);
     await page.goto(base);
-    await page.getByLabel('Email', { exact: true }).fill('test@example.com');
-    await page.getByLabel('Password', { exact: true }).fill(password);
-    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    authFixture.setNextIdentity('test@example.com');
+    await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
     await page.getByRole('combobox', { name: 'Model', exact: true }).selectOption('bf16');
     await page.getByRole('switch', { name: 'Use trained adapter', exact: true }).uncheck();
     await page.getByRole('button', { name: 'Attach image', exact: true }).waitFor();

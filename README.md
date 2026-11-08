@@ -124,7 +124,7 @@ cd D:\AILearn\qwen-chat
 ```
 
 Then configure Supabase and apply the account migration using [Account setup](docs/accounts.md).
-Open http://127.0.0.1:3001, choose **Create account**, and confirm your email before chatting.
+Open http://127.0.0.1:3001 and choose **Continue with Google**. New Google users get an account automatically.
 The setup script preserves existing `.env.local`; replace legacy login settings with the Supabase public variables in `.env.example`.
 
 On another machine with Node.js 22 or newer:
@@ -143,7 +143,7 @@ Supabase Auth and Postgres are required for accounts. No OpenAI account is requi
 - Multiple conversations, search, new chat, confirmed deletion, and recovery after a page reload.
 - Desktop and mobile layouts, keyboard submission, accessible labels, and reduced-motion support.
 - Persistent Advanced settings for input characters, output tokens, context tokens, history messages/bytes, request bytes, generation timeout, and safety tokens, plus adjustable creativity.
-- Public email/password signup, required email confirmation, password recovery, Supabase sessions, same-origin mutation checks, and bounded request bodies.
+- Public Google sign-in/signup, server-verified Google identities, live Supabase sessions, same-origin mutation checks, and bounded request bodies.
 - Live readiness checks and clear offline, loading, interrupted, and context-limit messages.
 - Conversations are scoped per account in this browser's local storage, not synced between devices or encrypted by the app. In live mode the selected conversation history is sent through the Vercel server and Runpod gateway to your model. The app and gateway do not log prompts or replies; hosting platforms may retain operational metadata.
 
@@ -208,7 +208,7 @@ Import this folder as a Next.js project using a supported Node.js 22+ runtime. A
 | `RUNPOD_BF16_CHAT_URL` | BF16 gateway HTTPS origin |
 | `RUNPOD_BF16_CHAT_TOKEN` | Matching separate BF16 chat gateway token |
 
-Never use `NEXT_PUBLIC_` for secret credentials. Local preview is forcibly disabled in production, even if `CHAT_PREVIEW_MODE=true`; missing gateway configuration returns an honest setup/unavailable response. The chat route declares a 300-second maximum execution time for Vercel Hobby compatibility. This includes validation, waiting for the model, and streaming the reply. The configurable generation timeout can be longer locally, but it does not override Vercel’s execution limit; on Vercel, choose a timeout below 300 seconds. Supabase handles authentication rate limits. Complete the migration, SMTP, confirmation, password policy, and redirect configuration in [Account setup](docs/accounts.md) before production cutover.
+Never use `NEXT_PUBLIC_` for secret credentials. Local preview is forcibly disabled in production, even if `CHAT_PREVIEW_MODE=true`; missing gateway configuration returns an honest setup/unavailable response. The chat route declares a 300-second maximum execution time for Vercel Hobby compatibility. This includes validation, waiting for the model, and streaming the reply. The configurable generation timeout can be longer locally, but it does not override Vercel’s execution limit; on Vercel, choose a timeout below 300 seconds. Supabase handles authentication rate limits. Complete the migration, Google OAuth provider, disabled email/password and anonymous sign-in, and callback allowlist configuration in [Account setup](docs/accounts.md) before production cutover.
 
 The hosted frontend uses its configured Vercel environment and is linked to `main`; merging changes there triggers a deployment. The two model engines and authenticated gateways run on their separate Runpod Pods. Updating server-side connection variables requires a new frontend deployment.
 

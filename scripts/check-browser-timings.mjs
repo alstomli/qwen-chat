@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 
-export async function checkBrowserTimings(base, password, admissionIs) {
+export async function checkBrowserTimings(base, authFixture, admissionIs) {
   const { chromium } = await import(pathToFileURL(process.env.CHAT_TEST_PLAYWRIGHT).href);
   const browser = await chromium.launch({ headless: true, ...(process.env.CHAT_TEST_BROWSER_CHANNEL ? { channel: process.env.CHAT_TEST_BROWSER_CHANNEL } : {}) });
   try {
@@ -10,9 +10,8 @@ export async function checkBrowserTimings(base, password, admissionIs) {
     const pageErrors = [];
     page.on('pageerror', error => pageErrors.push(error.message));
     await page.goto(base);
-    await page.getByLabel('Email', { exact: true }).fill('test@example.com');
-    await page.getByLabel('Password', { exact: true }).fill(password);
-    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    authFixture.setNextIdentity('test@example.com');
+    await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
     await page.getByRole('button', { name: 'Model online' }).waitFor();
     await page.getByRole('button', { name: 'Your workspace' }).click();
     const settings = page.locator('details.model-settings-section').filter({ hasText: 'Qwen3.8-27B-4bit' });

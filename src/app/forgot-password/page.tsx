@@ -1,2 +1,2 @@
-import { AccountForm } from "@/components/account-form";
-export default function Page() { return <AccountForm mode="forgot-password" />; }
+import { redirect } from "next/navigation";
+export default function Page() { redirect("/sign-in"); }

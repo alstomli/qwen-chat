@@ -36,7 +36,7 @@ function startFixture(modelPort, port, vision = false) {
   fixture.stdout.on('data', chunk => logs += chunk); fixture.stderr.on('data', chunk => logs += chunk);
 }
 try {
-  authFixture = await startAuthFixture(password);
+  authFixture = await startAuthFixture();
   if (fixturePython) {
     startFixture('18000', '18001');
     if (imageInput) startFixture('18002', '18003', true);
@@ -56,9 +56,7 @@ try {
   assert.equal((await fetch(base + '/api/status')).status, 401);
   assert.equal((await fetch(base + '/api/login', { method: 'POST', headers: { ...headers, Origin: 'https://evil.example' }, body: '{}' })).status, 403);
   assert.equal((await fetch(base + '/api/login', { method: 'POST', headers, body: JSON.stringify({ password }) })).status, 410);
-  const login = await fetch(authFixture.url + '/auth/v1/token?grant_type=password', { method: 'POST', headers, body: JSON.stringify({ email: 'test@example.com', password }) });
-  assert.equal(login.status, 200);
-  const session = await login.json();
+  const session = authFixture.issue(authFixture.users.get('test@example.com').user);
   const cookie = 'sb-127-auth-token=base64-' + Buffer.from(JSON.stringify(session)).toString('base64url'); headers.Cookie = cookie;
   const status = await (await fetch(base + '/api/status', { headers: { Cookie: cookie } })).json();
   assert.equal(status.mode, 'live'); assert.equal(status.ready, true);
@@ -144,19 +142,19 @@ try {
   assert.equal(response.status, 200); await response.text();
   if (imageInput) {
     const { checkImageInput } = await import('./check-image-input.mjs');
-    await checkImageInput({ base, gateway: imageGateway, token, headers, password });
+    await checkImageInput({ base, gateway: imageGateway, token, headers, authFixture });
   }
   assert.equal((await fetch(base + '/api/logout', { method: 'POST', headers })).status, 200);
   assert.equal((await fetch(base + '/api/status', { headers: { Cookie: cookie } })).status, 401);
   console.log('PASS: Cancellation releases capacity; logout revokes the session and rejects replay');
   if (process.env.CHAT_TEST_PLAYWRIGHT) {
     const { checkAccounts } = await import('./check-accounts.mjs');
-    await checkAccounts(base, password, authFixture, admissionIs);
+    await checkAccounts(base, authFixture, admissionIs);
     // Protocol/account checks share the real gateway's global 60-second rate window.
     // Let that window expire before the independent concurrent-stream UI check.
     await sleep(60_000);
     const { checkBrowserTimings } = await import('./check-browser-timings.mjs');
-    await checkBrowserTimings(base, password, admissionIs);
+    await checkBrowserTimings(base, authFixture, admissionIs);
   }
 } catch (error) {
   console.error(logs);

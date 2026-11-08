@@ -5,14 +5,14 @@ import { POST } from "../src/app/api/chat/route";
 import { accountStorageKey } from "../src/lib/account-storage";
 import { authResponse, cookieHeader, issueSession } from "./auth-fixture";
 
-test("API requires server-confirmed email and a live session, rejecting anonymous and legacy cookies", async () => {
+test("API requires server-confirmed Google identity and a live session, rejecting anonymous and legacy cookies", async () => {
   const savedEnv = { ...process.env }; const savedFetch = globalThis.fetch;
   try {
     const cookie = cookieHeader(issueSession());
-    let confirmed = true, active = true, invalid = false, rpc = 0;
+    let confirmed = true, active = true, invalid = false, google = true, rpc = 0;
     globalThis.fetch = async (input, init) => {
       if (String(input).includes("/rpc/")) rpc++;
-      const response = authResponse(input, init, { confirmed, active, invalid });
+      const response = authResponse(input, init, { confirmed, active, invalid, google });
       if (!response) throw new Error("Unauthenticated request reached inference");
       return response;
     };
@@ -21,7 +21,9 @@ test("API requires server-confirmed email and a live session, rejecting anonymou
     for (const cookies of ["", "qwen_session=old.signed.cookie", "sb-fixture-auth-token=forged"]) assert.equal((await POST(request(cookies))).status, 401);
     confirmed = false; const before = rpc;
     assert.equal((await POST(request())).status, 401); assert.equal(rpc, before);
-    confirmed = true; active = false;
+    confirmed = true; google = false;
+    assert.equal((await POST(request())).status, 401); assert.equal(rpc, before);
+    google = true; active = false;
     assert.equal((await POST(request())).status, 401);
     active = true; invalid = true;
     assert.equal((await POST(request())).status, 401);
