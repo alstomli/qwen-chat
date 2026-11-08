@@ -1,3 +1,4 @@
+import { startAuthFixture } from "./auth-test-fixture.mjs";
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
@@ -13,7 +14,7 @@ const imageInput = process.env.CHAT_TEST_IMAGE_INPUT === 'true';
 const imageGateway = 'http://127.0.0.1:18003';
 const password = randomBytes(24).toString('hex');
 assert.ok(!imageInput || fixturePython, 'Set CHAT_TEST_FIXTURE_PYTHON for the image input integration check');
-let server; let logs = '';
+let authFixture; let server; let logs = '';
 const fixtures = [];
 // Keep the test runner alive while native fetch uses unreferenced timeout handles.
 const keepAlive = setInterval(() => {}, 1000);
@@ -35,6 +36,7 @@ function startFixture(modelPort, port, vision = false) {
   fixture.stdout.on('data', chunk => logs += chunk); fixture.stderr.on('data', chunk => logs += chunk);
 }
 try {
+  authFixture = await startAuthFixture(password);
   if (fixturePython) {
     startFixture('18000', '18001');
     if (imageInput) startFixture('18002', '18003', true);
@@ -45,7 +47,7 @@ try {
   await waitFor('http://127.0.0.1:18001/health', { Authorization: 'Bearer ' + token });
   if (imageInput) await waitFor(imageGateway + '/health', { Authorization: 'Bearer ' + token });
   server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'dev', '--hostname', '127.0.0.1', '--port', '3002'], {
-    cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NODE_ENV: 'development', NEXT_TELEMETRY_DISABLED: '1', CHAT_DIAGNOSTICS_ENABLED: 'true', CHAT_TEST_DIST_DIR: '.next-integration', CHAT_PASSWORD: password, SESSION_SECRET: randomBytes(32).toString('hex'), RUNPOD_CHAT_URL: 'http://127.0.0.1:18001', RUNPOD_CHAT_TOKEN: token, CHAT_PREVIEW_MODE: 'false',
+    cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NODE_ENV: 'development', NEXT_TELEMETRY_DISABLED: '1', CHAT_DIAGNOSTICS_ENABLED: 'true', CHAT_TEST_DIST_DIR: '.next-integration', NEXT_PUBLIC_SUPABASE_URL: authFixture.url, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "fixture-public-key", RUNPOD_CHAT_URL: 'http://127.0.0.1:18001', RUNPOD_CHAT_TOKEN: token, CHAT_PREVIEW_MODE: 'false',
       RUNPOD_BF16_CHAT_URL: imageInput ? imageGateway : '', RUNPOD_BF16_CHAT_TOKEN: imageInput ? token : '', RUNPOD_IMAGE_API_KEY: '' },
   });
   server.stdout.on('data', chunk => logs += chunk); server.stderr.on('data', chunk => logs += chunk);
@@ -53,15 +55,16 @@ try {
   const headers = { 'Content-Type': 'application/json', Origin: base };
   assert.equal((await fetch(base + '/api/status')).status, 401);
   assert.equal((await fetch(base + '/api/login', { method: 'POST', headers: { ...headers, Origin: 'https://evil.example' }, body: '{}' })).status, 403);
-  assert.equal((await fetch(base + '/api/login', { method: 'POST', headers, body: JSON.stringify({ password: 'wrong' }) })).status, 401);
-  const login = await fetch(base + '/api/login', { method: 'POST', headers, body: JSON.stringify({ password }) });
+  assert.equal((await fetch(base + '/api/login', { method: 'POST', headers, body: JSON.stringify({ password }) })).status, 410);
+  const login = await fetch(authFixture.url + '/auth/v1/token?grant_type=password', { method: 'POST', headers, body: JSON.stringify({ email: 'test@example.com', password }) });
   assert.equal(login.status, 200);
-  const cookie = login.headers.get('set-cookie').split(';')[0]; headers.Cookie = cookie;
+  const session = await login.json();
+  const cookie = 'sb-127-auth-token=base64-' + Buffer.from(JSON.stringify(session)).toString('base64url'); headers.Cookie = cookie;
   const status = await (await fetch(base + '/api/status', { headers: { Cookie: cookie } })).json();
   assert.equal(status.mode, 'live'); assert.equal(status.ready, true);
   assert.equal(status.limits.contextTokens, 40960);
   assert.equal(status.diagnosticsAvailable, true);
-  console.log('PASS: Real HTTP login, cross-origin protection, and gateway health');
+  console.log('PASS: Supabase HTTP session fixture, retired shared login, origin protection, and gateway health');
   const chat = messages => fetch(base + '/api/chat', { method: 'POST', headers, body: JSON.stringify({ messages, max_tokens: 384 }) });
   let response = await chat([{ role: 'user', content: 'Hello' }]);
   assert.equal(response.status, 200); assert.match(response.headers.get('content-type'), /text\/event-stream/);
@@ -144,8 +147,14 @@ try {
     await checkImageInput({ base, gateway: imageGateway, token, headers, password });
   }
   assert.equal((await fetch(base + '/api/logout', { method: 'POST', headers })).status, 200);
-  console.log('PASS: Cancellation releases gateway capacity; logout clears the session cookie');
+  assert.equal((await fetch(base + '/api/status', { headers: { Cookie: cookie } })).status, 401);
+  console.log('PASS: Cancellation releases capacity; logout revokes the session and rejects replay');
   if (process.env.CHAT_TEST_PLAYWRIGHT) {
+    const { checkAccounts } = await import('./check-accounts.mjs');
+    await checkAccounts(base, password, authFixture, admissionIs);
+    // Protocol/account checks share the real gateway's global 60-second rate window.
+    // Let that window expire before the independent concurrent-stream UI check.
+    await sleep(60_000);
     const { checkBrowserTimings } = await import('./check-browser-timings.mjs');
     await checkBrowserTimings(base, password, admissionIs);
   }
@@ -154,6 +163,7 @@ try {
   throw error;
 } finally {
   clearInterval(keepAlive);
+  authFixture?.server.close();
   if (server && server.exitCode == null) {
     if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
     else server.kill('SIGTERM');

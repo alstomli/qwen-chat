@@ -6,7 +6,7 @@ import { runpodDocsIndex } from "@/lib/runpod-docs.server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
-  if (!requestAuthenticated(request)) return jsonError("Please sign in.", 401);
+  if (!await requestAuthenticated(request)) return jsonError("Please sign in.", 401);
   let model;
   try { model = parseModelId(new URL(request.url).searchParams.get("model") ?? undefined); }
   catch { return jsonError("Choose a supported model.", 400); }

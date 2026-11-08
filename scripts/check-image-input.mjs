@@ -72,8 +72,9 @@ async function checkBrowser(base, password) {
     const page = await browser.newPage();
     page.setDefaultTimeout(15_000);
     await page.goto(base);
-    await page.getByLabel('Workspace password', { exact: true }).fill(password);
-    await page.getByRole('button', { name: 'Enter workspace' }).click();
+    await page.getByLabel('Email', { exact: true }).fill('test@example.com');
+    await page.getByLabel('Password', { exact: true }).fill(password);
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
     await page.getByRole('combobox', { name: 'Model', exact: true }).selectOption('bf16');
     await page.getByRole('switch', { name: 'Use trained adapter', exact: true }).uncheck();
     await page.getByRole('button', { name: 'Attach image', exact: true }).waitFor();

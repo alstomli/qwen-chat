@@ -4,7 +4,7 @@ import { diagnosticsAllowed } from "../src/lib/server";
 import { DIAGNOSTICS_HEADER, parseDiagnosticHeader, parseTimingEvent, diagnosticValues, diagnosticsCsv, type DiagnosticRecord } from "../src/lib/diagnostics";
 import { consumeCompletion } from "../src/lib/protocol";
 import { DEFAULT_SETTINGS, SETTINGS_MAX } from "../src/lib/chat-settings";
-import { cookieHeader, issueSession } from "../src/lib/auth";
+import { cookieHeader, issueSession, authResponse } from "./auth-fixture";
 import { POST } from "../src/app/api/chat/route";
 import { GET } from "../src/app/api/status/route";
 
@@ -78,6 +78,7 @@ test("API forwards diagnostics only with both opt-ins, including errors, and rep
     const calls: { url: string; init?: RequestInit }[] = [];
     let supported = true; let failure = false; let rejection = ""; let failureStatus = 400;
     globalThis.fetch = async (input, init) => {
+      const auth = authResponse(input, init); if (auth) return auth;
       const url = String(input); calls.push({ url, init });
       if (url.endsWith("/health")) return Response.json({ ready: true, model: "qwen", settingsVersion: 1, limits: SETTINGS_MAX, diagnosticsVersion: supported ? 1 : 0 });
       return new Response(failure ? '{"error":"private upstream detail"}' : sse, { status: failure ? failureStatus : 200, headers: { [DIAGNOSTICS_HEADER]: JSON.stringify({ ...summary, credentials: "never forward" }), "Content-Type": "text/event-stream", "X-Chat-Rejection": rejection } });

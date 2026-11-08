@@ -10,8 +10,9 @@ export async function checkBrowserTimings(base, password, admissionIs) {
     const pageErrors = [];
     page.on('pageerror', error => pageErrors.push(error.message));
     await page.goto(base);
-    await page.getByLabel('Workspace password', { exact: true }).fill(password);
-    await page.getByRole('button', { name: 'Enter workspace' }).click();
+    await page.getByLabel('Email', { exact: true }).fill('test@example.com');
+    await page.getByLabel('Password', { exact: true }).fill(password);
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
     await page.getByRole('button', { name: 'Model online' }).waitFor();
     await page.getByRole('button', { name: 'Your workspace' }).click();
     const settings = page.locator('details.model-settings-section').filter({ hasText: 'Qwen3.8-27B-4bit' });

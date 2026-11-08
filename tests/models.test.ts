@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cookieHeader, issueSession } from "../src/lib/auth";
+import { cookieHeader, issueSession, authResponse } from "./auth-fixture";
 import { POST } from "../src/app/api/chat/route";
 import { GET } from "../src/app/api/status/route";
 import { MODELS } from "../src/lib/models";
@@ -18,6 +18,7 @@ test("model routing uses separate credentials and verified aliases, never client
     const calls: { url: string; token: string | null; body: Record<string, unknown> | null }[] = [];
     let wrongAlias = false;
     globalThis.fetch = async (input, init) => {
+      const auth = authResponse(input, init); if (auth) return auth;
       const url = String(input); const bf16 = url.startsWith("https://bf.example/");
       calls.push({ url, token: new Headers(init?.headers).get("Authorization"), body: init?.body ? JSON.parse(String(init.body)) : null });
       if (url.endsWith("/health")) return Response.json({ ready: true, model: bf16 && !wrongAlias ? "qwen-bf16" : "qwen", settingsVersion: 1,
@@ -66,6 +67,7 @@ test("cancelling a selected model stream aborts only its chosen upstream", async
       RUNPOD_BF16_CHAT_URL: "https://bf.example", RUNPOD_BF16_CHAT_TOKEN: "b".repeat(48) });
     let upstreamSignal: AbortSignal | null | undefined; let cancelled = false;
     globalThis.fetch = async (input, init) => {
+      const auth = authResponse(input, init); if (auth) return auth;
       assert.ok(String(input).startsWith("https://bf.example/"));
       if (String(input).endsWith("/health")) return Response.json({ ready: true, model: "qwen-bf16", settingsVersion: 1, limits: SETTINGS_MAX });
       upstreamSignal = init?.signal;
