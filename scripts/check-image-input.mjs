@@ -58,7 +58,7 @@ export async function checkImageInput({ base, gateway, token, headers, authFixtu
   }
   const gatewayRejection = await post(gateway + '/v1/chat/completions', {
     ...request, stream: true, image: 'data:image/png;base64,' + imageBytes.subarray(0, 24).toString('base64'),
-  }, { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' });
+  }, { Authorization: 'Bearer ' + token, 'X-Chat-User-Id': '33333333-3333-4333-8333-333333333333', 'Content-Type': 'application/json' });
   assert.equal(gatewayRejection.status, 400);
   assert.equal(gatewayRejection.headers.get('X-Chat-Rejection'), 'image_invalid');
   assert.equal(gatewayRejection.headers.get(imageHeader), null);

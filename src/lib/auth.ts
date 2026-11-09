@@ -1,9 +1,11 @@
 import { createServerClient } from "@supabase/ssr";
 import { authConfig } from "./supabase/config";
 import { isVerifiedGoogleUser } from "./google-user";
-export async function requestAuthenticated(request: Request) {
+export type AuthenticatedPrincipal = { userId: string };
+const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export async function requestPrincipal(request: Request): Promise<AuthenticatedPrincipal | null> {
   const config = authConfig();
-  if (!config) return false;
+  if (!config) return null;
   try {
     const supabase = createServerClient(config.url, config.key, { cookies: {
       getAll: () => (request.headers.get("cookie") ?? "").split(";").map(cookie => {
@@ -14,10 +16,14 @@ export async function requestAuthenticated(request: Request) {
       setAll: () => {},
     } });
     const { data, error } = await supabase.auth.getUser();
-    if (error || !isVerifiedGoogleUser(data.user)) return false;
+    if (error || !isVerifiedGoogleUser(data.user)) return null;
     const { data: active, error: sessionError } = await supabase.rpc("chat_session_active");
-    return !sessionError && active === true;
-  } catch { return false; }
+    return !sessionError && active === true && canonicalUuid.test(data.user.id)
+      ? { userId: data.user.id.toLowerCase() } : null;
+  } catch { return null; }
+}
+export async function requestAuthenticated(request: Request) {
+  return (await requestPrincipal(request)) !== null;
 }
 export function sameOrigin(request: Request) {
   const origin = request.headers.get("origin");

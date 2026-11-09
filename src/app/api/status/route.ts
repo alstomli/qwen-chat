@@ -1,5 +1,5 @@
 import { requestAuthenticated } from "@/lib/auth";
-import { connectionConfig, gatewayCapabilities, diagnosticsAllowed, jsonError } from "@/lib/server";
+import { connectionConfig, gatewayCapabilities, GatewayCompatibilityError, diagnosticsAllowed, jsonError } from "@/lib/server";
 import { SETTINGS_MAX } from "@/lib/chat-settings";
 import { parseModelId } from "@/lib/models";
 export const runtime = "nodejs";
@@ -18,5 +18,5 @@ export async function GET(request: Request) {
       adapterToggleAvailable: capabilities.adapterToggleAvailable,
       ...(capabilities.imageInput ? { imageInputVersion: 1, imageInput: capabilities.imageInput } : {}),
       diagnosticsVersion: diagnosticsAvailable ? 1 : 0 }, { headers: { "Cache-Control": "no-store" } });
-  } catch (error) { return Response.json({ model, mode: "live", ready: false, error: error instanceof Error ? error.message : "Model unavailable." }, { headers: { "Cache-Control": "no-store" } }); }
+  } catch (error) { return Response.json({ model, mode: "live", ready: false, error: error instanceof Error ? error.message : "Model unavailable." }, { status: error instanceof GatewayCompatibilityError ? 503 : 200, headers: { "Cache-Control": "no-store" } }); }
 }

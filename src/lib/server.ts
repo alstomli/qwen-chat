@@ -39,11 +39,14 @@ export function connectionConfig(selected: ModelId = DEFAULT_MODEL) {
 export function diagnosticsAllowed(env: Record<string, string | undefined> = process.env) {
   return env.CHAT_DIAGNOSTICS_ENABLED === "true";
 }
+export class GatewayCompatibilityError extends Error {}
 export async function gatewayCapabilities(config: ReturnType<typeof connectionConfig>) {
   const response = await fetch(config.base + "/health", { headers: { Authorization: "Bearer " + config.token }, cache: "no-store", signal: AbortSignal.timeout(5000) });
   if (!response.ok) throw new Error("The model is unavailable or still loading.");
   const body = await response.json();
   if (body.ready !== true || body.model !== modelInfo(config.model).alias) throw new Error("The selected model could not be verified at its gateway.");
+  if (body.accountQuotaVersion !== 1 || body.accountQuotasEnforced !== true)
+    throw new GatewayCompatibilityError("The model account limits could not be verified. Please try again shortly.");
   if (body.settingsVersion !== 1) throw new Error("Update the chat gateway to use configurable settings.");
   return { limits: parseServerLimits(body.limits), diagnosticsVersion: body.diagnosticsVersion === 1 ? 1 : 0,
     adapterToggleAvailable: config.model === "bf16" && body.adapterToggleVersion === 1 && body.adapterToggleAvailable === true,

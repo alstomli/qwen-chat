@@ -1,5 +1,5 @@
-import { requestAuthenticated, sameOrigin } from "@/lib/auth";
-import { connectionConfig, gatewayCapabilities, diagnosticsAllowed, jsonError, readJson } from "@/lib/server";
+import { requestPrincipal, sameOrigin } from "@/lib/auth";
+import { connectionConfig, gatewayCapabilities, GatewayCompatibilityError, diagnosticsAllowed, jsonError, readJson } from "@/lib/server";
 import { DIAGNOSTICS_HEADER, parseDiagnosticHeader } from "@/lib/diagnostics";
 import { validateInput } from "@/lib/protocol";
 import { validateSettings, gatewaySettings } from "@/lib/chat-settings";
@@ -10,7 +10,8 @@ export const dynamic = "force-dynamic";
 const streamHeaders = { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no" };
 
 export async function POST(request: Request) {
-  if (!await requestAuthenticated(request)) return jsonError("Your session expired. Sign in to continue.", 401);
+  const principal = await requestPrincipal(request);
+  if (!principal) return jsonError("Your session expired. Sign in to continue.", 401);
   if (!sameOrigin(request)) return jsonError("This request isn't allowed.", 403);
   const diagnosticRequested = request.headers.get(DIAGNOSTICS_HEADER) === "1";
   if (diagnosticRequested && !diagnosticsAllowed()) return jsonError("Request diagnostics are disabled.", 403);
@@ -59,7 +60,7 @@ export async function POST(request: Request) {
       if (diagnosticRequested && capabilities.diagnosticsVersion !== 1) return jsonError("Enable diagnostics on an updated gateway first.", 503);
       settings = gatewaySettings(input.settings, capabilities.limits);
     }
-    catch (error) { return jsonError(error instanceof Error ? error.message : "Gateway settings unavailable.", 400); }
+    catch (error) { return jsonError(error instanceof Error ? error.message : "Gateway settings unavailable.", error instanceof GatewayCompatibilityError ? 503 : 400); }
     const body = JSON.stringify({ ...gatewayInput, settings, stream: true });
     const controller = new AbortController();
     let timedOut = false;
@@ -69,7 +70,7 @@ export async function POST(request: Request) {
     let upstream: Response;
     try {
       upstream = await fetch(config.base + "/v1/chat/completions", {
-        method: "POST", headers: { Authorization: "Bearer " + config.token, "Content-Type": "application/json", ...(diagnosticRequested ? { [DIAGNOSTICS_HEADER]: "1" } : {}) },
+        method: "POST", headers: { Authorization: "Bearer " + config.token, "X-Chat-User-Id": principal.userId, "Content-Type": "application/json", ...(diagnosticRequested ? { [DIAGNOSTICS_HEADER]: "1" } : {}) },
         body, signal: controller.signal, cache: "no-store"
       });
     } catch (error) {
@@ -91,7 +92,17 @@ export async function POST(request: Request) {
       clearTimeout(timer); request.signal.removeEventListener("abort", cancel);
       let message = "Your model is unavailable or still loading. Try again shortly.";
       if (upstream.status === 429) message = "Your model is answering another request. Try again in a moment.";
-      const rejection = upstream.headers.get("X-Chat-Rejection");
+      const upstreamRejection = upstream.headers.get("X-Chat-Rejection");
+      const allowedRejections = ["queue_full", "rate_limit", "user_capacity", "user_rate_limit", "queue_timeout", "user_identity", "image_adapter", "image_unsupported", "image_invalid", "image_processing"];
+      const rejection = allowedRejections.includes(upstreamRejection ?? "") ? upstreamRejection : null;
+      const retryValue = upstream.headers.get("Retry-After");
+      const retryAfter = upstream.status === 429 && (rejection === "user_rate_limit" || rejection === "rate_limit")
+        && retryValue !== null && /^(?:[1-9]|[1-5][0-9]|60)$/.test(retryValue) ? Number(retryValue) : null;
+      if (upstream.status === 429 && rejection === "user_capacity")
+        message = "Your account already has requests in progress for this model. Wait for one to finish, then try again.";
+      if (upstream.status === 429 && rejection === "user_rate_limit")
+        message = retryAfter === null ? "Your account has sent too many requests to this model. Wait a minute, then try again."
+          : "Your account has sent too many requests to this model. Try again in " + retryAfter + (retryAfter === 1 ? " second." : " seconds.");
       if (upstream.status === 429 && rejection === "queue_full") message = "The model's waiting queue is full. Please try again shortly.";
       if (upstream.status === 429 && rejection === "rate_limit") message = "The chat request rate limit has been reached. Please wait a minute and try again.";
       if (upstream.status === 504 && rejection === "queue_timeout") message = "Your request timed out while waiting for the model. Please try again.";
@@ -101,8 +112,13 @@ export async function POST(request: Request) {
       if (input.image && rejection === "image_unsupported") message = IMAGE_UNSUPPORTED_ERROR;
       if (input.image && rejection === "image_invalid") message = "The model rejected the attached image. Try a different JPEG, PNG, or WebP file.";
       if (input.image && rejection === "image_processing") message = "The model could not process the attached image. Try again.";
+      if (upstream.status === 400 && rejection === "user_identity")
+        message = "The model account limits could not be verified. Please try again shortly.";
       await upstream.body?.cancel();
-      const response = jsonError(message, [400, 413, 429].includes(upstream.status) || (upstream.status === 504 && rejection === "queue_timeout") ? upstream.status : 503);
+      const response = jsonError(message, upstream.status === 400 && rejection === "user_identity" ? 503 : [400, 413, 429].includes(upstream.status) || (upstream.status === 504 && rejection === "queue_timeout") ? upstream.status : 503);
+      if (upstream.status === 429 && rejection !== null && ["queue_full", "rate_limit", "user_capacity", "user_rate_limit"].includes(rejection))
+        response.headers.set("X-Chat-Rejection", rejection);
+      if (retryAfter !== null) response.headers.set("Retry-After", String(retryAfter));
       for (const [key, value] of Object.entries(diagnosticHeaders)) response.headers.set(key, value);
       return response;
     }

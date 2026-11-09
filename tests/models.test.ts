@@ -21,7 +21,7 @@ test("model routing uses separate credentials and verified aliases, never client
       const auth = authResponse(input, init); if (auth) return auth;
       const url = String(input); const bf16 = url.startsWith("https://bf.example/");
       calls.push({ url, token: new Headers(init?.headers).get("Authorization"), body: init?.body ? JSON.parse(String(init.body)) : null });
-      if (url.endsWith("/health")) return Response.json({ ready: true, model: bf16 && !wrongAlias ? "qwen-bf16" : "qwen", settingsVersion: 1,
+      if (url.endsWith("/health")) return Response.json({ ready: true, model: bf16 && !wrongAlias ? "qwen-bf16" : "qwen", settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true,
         limits: { ...SETTINGS_MAX, contextTokens: 40960 }, diagnosticsVersion: bf16 ? 0 : 1 });
       return new Response(`data: {"choices":[{"delta":{"content":"${bf16 ? "BF16 fixture" : "4bit fixture"}"}}]}\n\ndata: [DONE]\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     };
@@ -69,7 +69,7 @@ test("cancelling a selected model stream aborts only its chosen upstream", async
     globalThis.fetch = async (input, init) => {
       const auth = authResponse(input, init); if (auth) return auth;
       assert.ok(String(input).startsWith("https://bf.example/"));
-      if (String(input).endsWith("/health")) return Response.json({ ready: true, model: "qwen-bf16", settingsVersion: 1, limits: SETTINGS_MAX });
+      if (String(input).endsWith("/health")) return Response.json({ ready: true, model: "qwen-bf16", settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true, limits: SETTINGS_MAX });
       upstreamSignal = init?.signal;
       return new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n')); }, cancel() { cancelled = true; } }));
     };

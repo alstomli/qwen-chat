@@ -43,7 +43,7 @@ test("API negotiates and verifies adapter mode, rejecting old or mismatched gate
     const forwarded: Record<string, unknown>[] = [];
     globalThis.fetch = async (url, init) => {
       const auth = authResponse(url, init); if (auth) return auth;
-      if (String(url).endsWith("/health")) return Response.json({ ready: true, model: "qwen-bf16", settingsVersion: 1,
+      if (String(url).endsWith("/health")) return Response.json({ ready: true, model: "qwen-bf16", settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true,
         limits: SETTINGS_MAX, adapterToggleAvailable: available, adapterToggleVersion: available ? 1 : 0 });
       const body = JSON.parse(String(init?.body)); forwarded.push(body);
       return new Response('data: {"choices":[{"delta":{"content":"fixture"}}]}\n\ndata: [DONE]\n\n', {
