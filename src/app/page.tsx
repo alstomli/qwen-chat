@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { serverAuth } from "@/lib/supabase/server";
 import { isVerifiedGoogleUser } from "@/lib/google-user";
 import ChatWorkspace from "@/components/chat-workspace";
+import { canUseAdvancedSettings } from "@/lib/settings-access";
 export const dynamic = "force-dynamic";
 export default async function Home() {
   const supabase = await serverAuth();
@@ -10,5 +11,5 @@ export default async function Home() {
   if (result?.error || !isVerifiedGoogleUser(user)) redirect("/sign-in");
   const { data: active, error } = await supabase!.rpc("chat_session_active");
   if (error || active !== true) redirect("/sign-in");
-  return <ChatWorkspace key={user.id} userId={user.id} email={user.email ?? "Your account"} />;
+  return <ChatWorkspace key={user.id} userId={user.id} email={user.email ?? "Your account"} canUseAdvancedSettings={canUseAdvancedSettings(user.id)} />;
 }

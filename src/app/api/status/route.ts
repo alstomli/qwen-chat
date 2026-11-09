@@ -1,11 +1,12 @@
-import { requestAuthenticated } from "@/lib/auth";
+import { requestPrincipal } from "@/lib/auth";
 import { connectionConfig, gatewayCapabilities, GatewayCompatibilityError, diagnosticsAllowed, jsonError } from "@/lib/server";
 import { SETTINGS_MAX } from "@/lib/chat-settings";
 import { parseModelId } from "@/lib/models";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
-  if (!await requestAuthenticated(request)) return jsonError("Please sign in.", 401);
+  const principal = await requestPrincipal(request);
+  if (!principal) return jsonError("Please sign in.", 401);
   let model;
   try { model = parseModelId(new URL(request.url).searchParams.get("model") ?? undefined); }
   catch { return jsonError("Choose a supported model.", 400); }
@@ -13,7 +14,7 @@ export async function GET(request: Request) {
     const config = connectionConfig(model);
     if (config.mode !== "live") return Response.json({ model, mode: config.mode, ready: config.mode === "preview", limits: SETTINGS_MAX, diagnosticsAvailable: false, diagnosticsVersion: 0 }, { headers: { "Cache-Control": "no-store" } });
     const capabilities = await gatewayCapabilities(config);
-    const diagnosticsAvailable = diagnosticsAllowed() && capabilities.diagnosticsVersion === 1;
+    const diagnosticsAvailable = principal.canUseAdvancedSettings && diagnosticsAllowed() && capabilities.diagnosticsVersion === 1;
     return Response.json({ model, mode: "live", ready: true, limits: capabilities.limits, diagnosticsAvailable,
       adapterToggleAvailable: capabilities.adapterToggleAvailable,
       ...(capabilities.imageInput ? { imageInputVersion: 1, imageInput: capabilities.imageInput } : {}),

@@ -4,7 +4,7 @@ import { validateInput } from "../src/lib/protocol";
 import { parseConversations } from "../src/lib/storage";
 import { answerModelLabel } from "../src/lib/models";
 import { fitMessages, jsonBytes, DEFAULT_SETTINGS, SETTINGS_MAX } from "../src/lib/chat-settings";
-import { cookieHeader, issueSession, authResponse } from "./auth-fixture";
+import { adminIds, cookieHeader, issueSession, authResponse } from "./auth-fixture";
 import { POST } from "../src/app/api/chat/route";
 import { GET } from "../src/app/api/status/route";
 
@@ -42,14 +42,14 @@ test("API negotiates and verifies adapter mode, rejecting old or mismatched gate
     let available = true; let confirmation = true;
     const forwarded: Record<string, unknown>[] = [];
     globalThis.fetch = async (url, init) => {
-      const auth = authResponse(url, init); if (auth) return auth;
+      const auth = authResponse(url, init, { userId: adminIds[0] }); if (auth) return auth;
       if (String(url).endsWith("/health")) return Response.json({ ready: true, model: "qwen-bf16", settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true,
         limits: SETTINGS_MAX, adapterToggleAvailable: available, adapterToggleVersion: available ? 1 : 0 });
       const body = JSON.parse(String(init?.body)); forwarded.push(body);
       return new Response('data: {"choices":[{"delta":{"content":"fixture"}}]}\n\ndata: [DONE]\n\n', {
         headers: { "X-Chat-Adapter-Enabled": confirmation ? String(body.useAdapter) : "wrong" } });
     };
-    const headers = { Origin: "https://chat.example", Cookie: cookieHeader(issueSession()).split(";")[0], "Content-Type": "application/json" };
+    const headers = { Origin: "https://chat.example", Cookie: cookieHeader(issueSession(adminIds[0])).split(";")[0], "Content-Type": "application/json" };
     const request = (useAdapter: boolean) => new Request("https://chat.example/api/chat", { method: "POST", headers,
       body: JSON.stringify({ model: "bf16", useAdapter, messages: [{ role: "user", content: "Hi" }], settings: DEFAULT_SETTINGS }) });
     for (const enabled of [true, false]) {

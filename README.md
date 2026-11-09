@@ -1,6 +1,8 @@
 # Qwen Chat
 
-Advanced settings includes **Reuse cached prefixes**, on by default and saved in this browser. Turning it off makes the gateway isolate each request's prefix cache using a fresh server-generated salt. It does not free reserved GPU memory or disable cache writes. The toggle requires the companion inference-server gateway update; quota-compatible gateways without prefix reuse controls remain usable with the default behavior and the toggle disabled. Deploy the backend update before the frontend. Deployment requires separate approval.
+Advanced settings are available only to the two verified admin accounts configured in `src/lib/settings-access.ts`. The server checks the authenticated Supabase user ID and active session; browser preferences and request fields cannot grant access. Regular users retain Creativity, connection status, and chat history controls. Their advanced settings use defaults fitted to the selected gateway, prefix reuse is always on, request diagnostics are unavailable, and the BF16 adapter is always off, including when continuing saved conversations. BF16 requires a gateway that supports adapter switching and confirms base-model mode on its response; unsupported gateways fail closed.
+
+For admins, Advanced settings includes **Reuse cached prefixes**, on by default and saved in this browser. Turning it off makes the gateway isolate each request's prefix cache using a fresh server-generated salt. It does not free reserved GPU memory or disable cache writes. The toggle requires the companion inference-server gateway update; quota-compatible gateways without prefix reuse controls retain the default prefix behavior with the toggle disabled. Deploy the backend update before the frontend. Deployment requires separate approval.
 
 A personal chat workspace for the existing Qwen model on Runpod. The frontend and server-side API are built with Next.js 16, React 19, and TypeScript, deployed to Vercel with local development support.
 
@@ -8,8 +10,8 @@ The frontend can run locally at `http://127.0.0.1:3001`; the hosted production s
 
 ## Choose a model
 
-When the BF16 gateway advertises adapter switching, **Use trained adapter**
-appears under **Your workspace → Qwen3.8-27B-bf16 → Advanced settings**. New conversations default to On:
+For admins, when the BF16 gateway advertises adapter switching, **Use trained adapter**
+appears under **Your workspace → Qwen3.8-27B-bf16 → Advanced settings**. Their new conversations default to On:
 On requests the registered adapter, while Off requests the original BF16 base.
 The choice is saved per conversation; each new assistant answer records its own
 mode and is labeled **BF16 + adapter** or **BF16 base**. Changing the choice does
@@ -81,7 +83,7 @@ Open **Your workspace** to see both model connections at the top. Each status is
 checked independently; one unavailable or unconfigured model does not hide the
 other model's readiness. **Refresh connections** checks both gateways in parallel.
 
-Below, expand either `Qwen3.8-27B-4bit` or `Qwen3.8-27B-bf16` to edit its own
+Admins can expand either `Qwen3.8-27B-4bit` or `Qwen3.8-27B-bf16` to edit its own
 Advanced settings. Each section has separate fields, Apply, and Reset controls.
 Editing settings does not change the model selected for the conversation. Unsaved
 drafts remain isolated while opening and closing either section; Apply and Reset
