@@ -163,7 +163,7 @@ try {
   gateway = createServer(async (req, res) => {
     if (req.url === '/health') {
       res.setHeader('Content-Type', 'application/json');
-      return res.end(JSON.stringify({ ready: true, model: 'qwen-bf16', settingsVersion: 1, limits,
+      return res.end(JSON.stringify({ ready: true, model: 'qwen-bf16', settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true, limits,
         imageInputVersion: 1, imageInput: { maxBytes: 262144, maxDimension: 2048, mimeTypes: ['image/png', 'image/jpeg', 'image/webp'] } }));
     }
     assert.equal(req.url, '/v1/chat/completions');

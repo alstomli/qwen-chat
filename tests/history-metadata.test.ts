@@ -25,7 +25,7 @@ test("ordinary API streaming ignores obsolete gateway capabilities and strips re
   const stream = 'data: {"choices":[{"delta":{"content":"Ordinary answer"}}]}\n\ndata: [DONE]\n\n';
   context.mock.method(globalThis, "fetch", async (...[input, init]: Parameters<typeof fetch>) => {
     const auth = authResponse(input, init); if (auth) return auth;
-    if (String(input).endsWith("/health")) return Response.json({ ready: true, model: "qwen", settingsVersion: 1, limits: SETTINGS_MAX,
+    if (String(input).endsWith("/health")) return Response.json({ ready: true, model: "qwen", settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true, limits: SETTINGS_MAX,
       docsModeVersion: 1, docsModeAvailable: true, docsModeUnavailable: "index" });
     forwarded.push(JSON.parse(String(init?.body)));
     return new Response(stream, { headers: { "X-Chat-Docs-Mode": "1", "X-Chat-Docs-Sources": encodeURIComponent(JSON.stringify(sources)) } });

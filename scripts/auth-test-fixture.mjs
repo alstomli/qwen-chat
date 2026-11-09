@@ -113,7 +113,7 @@ export async function startAuthFixture(port = 18005) {
     return reply({ msg: `Unknown fixture path ${url.pathname}` }, 404);
   });
   await new Promise(resolve => server.listen(port, '127.0.0.1', resolve));
-  return { server, url: `http://127.0.0.1:${port}`, users, sessions, issue, history, historyCalls,
+  return { server, url: `http://127.0.0.1:${port}`, users, sessions, issue, addUser, history, historyCalls,
     setNextIdentity(email) { nextEmail = email; }, setNextError(error) { nextError = error; },
     setRegistrationAvailable(value) { registrationAvailable = value; },
     setHistoryFailure(value) { historyFailure = value; }, setHistoryPaused(value) { historyPaused = value; } };

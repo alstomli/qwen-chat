@@ -7,7 +7,8 @@ import { RequestDiagnostics, exportDiagnostics } from "@/components/request-diag
 import { DIAGNOSTICS_HEADER, parseDiagnosticHeader, type BrowserTimings, type DiagnosticRecord } from "@/lib/diagnostics";
 import { AnswerPaint } from "@/components/answer-paint";
 import { ModelSettingsPanel } from "@/components/model-settings-panel";
-import { DEFAULT_SETTINGS, SETTINGS_MAX, SETTINGS_KEY, MODEL_SETTINGS_KEY, parseModelSettings, fitSettings, fitMessages, jsonBytes, type ModelSettings } from "@/lib/chat-settings";
+import { DEFAULT_SETTINGS, SETTINGS_MAX, SETTINGS_KEY, MODEL_SETTINGS_KEY, parseModelSettings, fitMessages, jsonBytes, type ModelSettings } from "@/lib/chat-settings";
+import { adapterForAccess, settingsForAccess } from "@/lib/settings-access";
 import { consumeCompletion } from "@/lib/protocol";
 import { IMAGE_ACCEPTED_HEADER, IMAGE_ADAPTER_ERROR, validateImageInput } from "@/lib/image-input";
 import { prepareImage, type ImageAttachment } from "@/lib/prepare-image";
@@ -27,7 +28,7 @@ const starters = [
 const uid = () => crypto.randomUUID();
 const logo = <span className="qwen-symbol" aria-hidden="true">✳</span>;
 
-export default function ChatWorkspace({ userId, email }: { userId: string; email: string }) {
+export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }: { userId: string; email: string; canUseAdvancedSettings: boolean }) {
   const [authenticated, setAuthenticated] = useState(true);
   const storageKey = accountStorageKey(STORAGE_KEY, userId);
   const settingsKey = accountStorageKey(SETTINGS_KEY, userId);
@@ -75,15 +76,17 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
   const busy = activeId !== null && streamingChats.has(activeId);
   const selectedModel = active?.model ?? draftModel;
   const connection = connections[selectedModel];
-  const selectedAdapter = active ? active.useAdapter ?? true : draftAdapter;
+  const selectedAdapter = canUseAdvancedSettings ? active ? active.useAdapter ?? true : draftAdapter : false;
   const adapterAvailable = selectedModel === "bf16" && connection.adapterToggleAvailable === true;
-  const selectedLabel = answerModelLabel(selectedModel, adapterAvailable ? selectedAdapter : undefined);
+  const effectiveAdapter = adapterForAccess(selectedModel, adapterAvailable ? selectedAdapter : undefined, canUseAdvancedSettings);
+  const selectedLabel = answerModelLabel(selectedModel, effectiveAdapter);
   const preview = connection.mode === "preview";
   const limits = connection.limits ?? SETTINGS_MAX;
-  const effectiveSettings = fitSettings(preferences[selectedModel], limits);
+  const effectiveSettings = settingsForAccess(preferences[selectedModel], canUseAdvancedSettings, limits);
   const imageInput = selectedModel === "bf16" && connection.mode === "live" && connection.ready ? connection.imageInput : undefined;
   const imageUnavailable = selectedModel !== "bf16" ? "Select the BF16 model to attach an image."
     : !imageInput ? "Image attachments require a connected BF16 gateway with image input enabled."
+    : !canUseAdvancedSettings && !adapterAvailable ? "Reconnect BF16 to a gateway that can verify base model mode before attaching an image."
     : adapterAvailable && selectedAdapter ? IMAGE_ADAPTER_ERROR : "";
   const attachmentUnavailable = imageUnavailable;
 
@@ -93,7 +96,8 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
     catch { setToast("Your browser couldn't load saved conversations."); }
     try {
       const raw = localStorage.getItem(settingsKey);
-      setPreferences(parseModelSettings(localStorage.getItem(modelSettingsKey), raw));
+      setPreferences(canUseAdvancedSettings ? parseModelSettings(localStorage.getItem(modelSettingsKey), raw)
+        : { "4bit": { ...DEFAULT_SETTINGS }, bf16: { ...DEFAULT_SETTINGS } });
       const temperature = JSON.parse(raw ?? "null")?.temperature;
       if (typeof temperature === "number" && Number.isFinite(temperature) && temperature >= 0 && temperature <= 1.5) setTemperature(temperature);
     } catch { setToast("Your browser couldn't load saved settings."); }
@@ -108,9 +112,12 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
   }, [chats, loaded, authenticated]);
   useEffect(() => {
     if (!loaded || !authenticated) return;
-    try { localStorage.setItem(modelSettingsKey, JSON.stringify(preferences)); localStorage.setItem(settingsKey, JSON.stringify({ ...preferences["4bit"], temperature })); }
+    try {
+      if (canUseAdvancedSettings) localStorage.setItem(modelSettingsKey, JSON.stringify(preferences));
+      localStorage.setItem(settingsKey, JSON.stringify(canUseAdvancedSettings ? { ...preferences["4bit"], temperature } : { temperature }));
+    }
     catch { setToast("Your browser couldn't save settings. They will only apply in this tab."); }
-  }, [preferences, temperature, loaded, authenticated]);
+  }, [preferences, temperature, loaded, authenticated, canUseAdvancedSettings]);
   useEffect(() => {
     if (!authenticated || !loaded) return;
     setConnections(initialModelConnections());
@@ -179,7 +186,7 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
     setReadingImage(true);
     try {
       const wireWithoutImageData = jsonBytes({
-        model: selectedModel, useAdapter: adapterAvailable ? selectedAdapter : undefined,
+        model: selectedModel, useAdapter: effectiveAdapter,
         messages: [{ role: "user", content: draft.trim() || " " }],
         max_tokens: effectiveSettings.outputTokens, temperature, settings: effectiveSettings,
         image: "data:image/jpeg;base64,", stream: true,
@@ -194,7 +201,7 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
     }
   }
   function selectAdapter(useAdapter: boolean) {
-    if ((activeId && controllers.current.has(activeId)) || !adapterAvailable || !connection.ready) return;
+    if (!canUseAdvancedSettings || (activeId && controllers.current.has(activeId)) || !adapterAvailable || !connection.ready) return;
     if (activeId) setChats(previous => previous.map(chat => chat.id === activeId ? { ...chat, useAdapter } : chat));
     else setDraftAdapter(useAdapter);
   }
@@ -212,8 +219,8 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
     text = text.trim(); if (!text || (activeId && controllers.current.has(activeId))) return;
     if (activeId && cloud?.entries.get(activeId)?.loaded === false) { setToast("Load this conversation before adding a message."); return; }
     if (!connection.ready || !connection.limits) { setToast(connection.error ?? "Wait for the server limits to be verified before sending."); return; }
-    if (selectedModel === "bf16" && selectedAdapter === false && !adapterAvailable) { setToast("Adapter selection is unavailable. Reconnect or start a new conversation."); return; }
-    const useAdapter = adapterAvailable ? selectedAdapter : undefined;
+    if (selectedModel === "bf16" && selectedAdapter === false && !adapterAvailable && !preview) { setToast("Adapter selection is unavailable. Reconnect or start a new conversation."); return; }
+    const useAdapter = effectiveAdapter;
     if (text.length > effectiveSettings.inputCharacters) { setToast(`Please shorten your message to ${effectiveSettings.inputCharacters.toLocaleString()} characters or fewer.`); return; }
     const retryIndex = retryId ? messages.findIndex(message => message.id === retryId && message.role === "user") : -1;
     if (retryId && retryIndex < 0) { setToast("This earlier message is unavailable. Cancel the retry to start a new message."); return; }
@@ -231,7 +238,7 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
     let input;
     try { input = fitMessages(candidates, effectiveSettings, temperature, selectedModel, useAdapter, image?.dataUrl); }
     catch (error) { setToast(error instanceof Error ? error.message : "Message exceeds your configured limits."); return; }
-    const captureDiagnostic = diagnosticsEnabled[selectedModel] && connection.diagnosticsAvailable === true;
+    const captureDiagnostic = canUseAdvancedSettings && diagnosticsEnabled[selectedModel] && connection.diagnosticsAvailable === true;
     if (captureDiagnostic) setDiagnosticRecords(records => [...records.slice(-99), {
       id: responseId, createdAt: new Date().toISOString(), status: "pending", selectedModel, useAdapter,
       browserOriginalMessages: candidates.length, browserSentMessages: input.length,
@@ -303,7 +310,7 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
   function retry() {
     const message = messages.findLast(m => m.role === "user");
     if (!message) return;
-    if (attachment || readingImage || retryImageId) { setToast("Finish or clear the current image draft before retrying."); return; }
+    if (draft || attachment || readingImage || retryImageId) { setToast("Finish or clear your current draft before retrying."); return; }
     const image = sentImages.current.get(message.id)?.attachment;
     if (message.imageName && !image) {
       setDraft(message.content); setRetryImageId(message.id); textarea.current?.focus();
@@ -408,7 +415,7 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
               {message.role === "user" && message.imageName && <MessageAttachment name={message.imageName} attachment={sentImages.current.get(message.id)?.attachment}/>}
               {message.content ? message.role === "user" ? <p className="user-content">{message.content}</p> : <AnswerPaint messageId={message.id} onPaint={diagnosticsById.get(message.id)?.browserTimings?.firstRenderMs === null ? markFirstRender : undefined}><MessageMarkdown message={message}/></AnswerPaint>
                 : busy && index === messages.length - 1 ? <div className="thinking" aria-label="Qwen is thinking"><span/><span/><span/></div> : null}
-              {diagnosticsById.has(message.id) && <RequestDiagnostics record={diagnosticsById.get(message.id)!}/>}
+              {canUseAdvancedSettings && diagnosticsById.has(message.id) && <RequestDiagnostics record={diagnosticsById.get(message.id)!}/>}
               {message.note && <div className={`message-note ${message.state === "error" ? "error" : ""}`} role={message.state === "error" ? "alert" : undefined}>{message.note}</div>}
               {message.role === "assistant" && !busy && <div className="message-actions">
                 {message.content && <CopyButton text={message.content}/>}
@@ -466,12 +473,12 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
     </div>
     {toast && <div className="toast" role="status">{toast}<button onClick={() => setToast("")} aria-label="Dismiss notification"><X size={14}/></button></div>}
     {(settings || deleting) && <div className="modal-backdrop" onClick={() => { setSettings(false); setDeleting(null); }}><div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" ref={dialog} onKeyDown={trapFocus} onClick={e => e.stopPropagation()}><button className="icon-button close-dialog" onClick={() => { setSettings(false); setDeleting(null); }} aria-label="Close dialog"><X size={20}/></button>{deleting ? <><div className="eyebrow">MAKE A LITTLE ROOM</div><h2 id="dialog-title">Delete this conversation?</h2><p>{deleting && !legacyIds.current.has(deleting) && ((cloud?.entries.get(deleting)?.revision ?? 0) > 0 || cloud?.entries.get(deleting)?.mayExistRemotely || !localStates.includes(cloud?.entries.get(deleting)?.state ?? "saved")) ? "This removes the conversation from cloud history on all your devices. It can’t be undone." : "This removes the conversation from this browser. It can’t be undone."}</p><div className="dialog-buttons"><button className="secondary-button" onClick={() => setDeleting(null)}>Keep conversation</button><button className="danger-button" onClick={deleteConversation}>Delete conversation</button></div></> : <><div className="eyebrow">MAKE YOURSELF AT HOME</div><h2 id="dialog-title">Your workspace</h2><ModelSettingsPanel connections={connections} preferences={preferences} busy={streamingChats.size > 0}
-      selectedModel={selectedModel} selectedAdapter={selectedAdapter} adapterBusy={busy} onAdapterChange={selectAdapter}
+      canUseAdvancedSettings={canUseAdvancedSettings} selectedModel={selectedModel} selectedAdapter={selectedAdapter} adapterBusy={busy} onAdapterChange={selectAdapter}
       temperature={temperature} onTemperatureChange={setTemperature}
-      diagnosticsEnabled={diagnosticsEnabled} onDiagnosticsChange={(model, enabled) => setDiagnosticsEnabled(previous => ({ ...previous, [model]: enabled }))}
+      diagnosticsEnabled={diagnosticsEnabled} onDiagnosticsChange={(model, enabled) => { if (canUseAdvancedSettings) setDiagnosticsEnabled(previous => ({ ...previous, [model]: enabled })); }}
       onRefresh={() => { void statusRequests.current?.refresh(); }}
-      onApply={(model, next) => { setPreferences(previous => ({ ...previous, [model]: next })); setToast(`${modelInfo(model).label} settings saved.`); }}/>
-      {diagnosticRecords.length > 0 && <div className="diagnostic-session"><p className="settings-help">{diagnosticRecords.length} diagnostic records in this session (latest 100). Reloading or signing out clears them.</p><button type="button" className="secondary-button" onClick={() => exportDiagnostics(diagnosticRecords)}>Export session CSV</button></div>}
+      onApply={(model, next) => { if (canUseAdvancedSettings) { setPreferences(previous => ({ ...previous, [model]: next })); setToast(`${modelInfo(model).label} settings saved.`); } }}/>
+      {canUseAdvancedSettings && diagnosticRecords.length > 0 && <div className="diagnostic-session"><p className="settings-help">{diagnosticRecords.length} diagnostic records in this session (latest 100). Reloading or signing out clears them.</p><button type="button" className="secondary-button" onClick={() => exportDiagnostics(diagnosticRecords)}>Export session CSV</button></div>}
       <section className="history-settings" aria-label="Chat history"><h3>Chat history</h3><p className="settings-help">New chats sync across devices. Cloud history keeps up to 50 chats or 2,000,000 UTF-8 bytes of text and chat details. Chats with the oldest last message are removed when full, except the chat being saved. Older browser conversations stay local, including future replies.</p><p className="settings-help">Text and chat details only. Images aren’t included. Export a copy before deleting or reaching the limit.</p><div className="history-export-actions"><button className="secondary-button" disabled={exporting || !chats.length} onClick={() => { void downloadHistory("json", true); }}>Export JSON</button><button className="secondary-button" disabled={exporting || !chats.length} onClick={() => { void downloadHistory("md", true); }}>Export Markdown</button></div>{active && <div className="history-export-actions"><button className="secondary-button" disabled={exporting} onClick={() => { void downloadHistory("json"); }}>Export this chat as JSON</button><button className="secondary-button" disabled={exporting} onClick={() => { void downloadHistory("md"); }}>Export this chat as Markdown</button></div>}{hasPending && <p className="settings-help">A change is waiting to sync. <button className="secondary-button" onClick={() => { void cloud?.retry(); }}>Retry sync</button></p>}</section><p className="settings-footnote">In live mode, messages you send are processed by your model. Older messages may be omitted to fit its context.</p><button className="signout-button" onClick={logout}><LogOut size={16}/> Sign out</button></>}</div></div>}
   </div>;
 }

@@ -10,7 +10,7 @@ export async function checkBrowserTimings(base, authFixture, admissionIs) {
     const pageErrors = [];
     page.on('pageerror', error => pageErrors.push(error.message));
     await page.goto(base);
-    authFixture.setNextIdentity('test@example.com');
+    authFixture.setNextIdentity('timings@example.com');
     await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
     await page.getByRole('button', { name: 'Model online' }).waitFor();
     await page.getByRole('button', { name: 'Your workspace' }).click();
@@ -24,18 +24,53 @@ export async function checkBrowserTimings(base, authFixture, admissionIs) {
       assert.match(text, /ms$/); return Number(text.replaceAll(',', '').replace(' ms', ''));
     };
     const prompt = page.getByRole('textbox', { name: /message/i });
-    async function startSlowReply() {
+    async function startSlowReply(waitForContent = true) {
       await prompt.fill('slow');
       await page.getByRole('button', { name: 'Send message' }).click();
-      await page.locator('.message.assistant').getByText(/sample/).waitFor();
+      if (waitForContent) await page.locator('.message.assistant').getByText(/sample/).waitFor();
     }
+    // A distinct verified account can use the second global slot while this
+    // account's second conversation remains queued.
+    const peerContext = await browser.newContext();
+    const peerUser = authFixture.users.get('peer-timings@example.com')?.user ?? authFixture.addUser('peer-timings@example.com');
+    const peerSession = authFixture.issue(peerUser);
+    await peerContext.addCookies([{ name: 'sb-127-auth-token', value: 'base64-' + Buffer.from(JSON.stringify(peerSession)).toString('base64url'), url: base }]);
+    const peerPage = await peerContext.newPage();
+    peerPage.on('pageerror', error => pageErrors.push(error.message));
+    await peerPage.goto(base);
+    await peerPage.getByRole('button', { name: 'Model online' }).waitFor();
+
     const inProgress = page.getByRole('button', { name: 'slow Reply in progress', exact: true });
     await startSlowReply();
     await page.getByRole('button', { name: /New conversation/ }).click();
     await inProgress.waitFor();
-    await startSlowReply();
-    await admissionIs(2, 0);
+    await startSlowReply(false);
+    await admissionIs(1, 1);
     assert.equal(await inProgress.count(), 2);
+
+    await peerPage.getByRole('textbox', { name: /message/i }).fill('slow');
+    await peerPage.getByRole('button', { name: 'Send message' }).click();
+    await peerPage.locator('.message.assistant').getByText(/sample/).waitFor();
+    await admissionIs(2, 1);
+    await peerPage.getByRole('button', { name: 'Stop generation' }).click();
+    await admissionIs(1, 1);
+    await peerContext.close();
+
+    await page.getByRole('button', { name: /New conversation/ }).click();
+    await prompt.fill('capacity retry prompt');
+    const rejection = page.waitForResponse(response => response.url().endsWith('/api/chat') && response.status() === 429);
+    await page.getByRole('button', { name: 'Send message' }).click();
+    assert.equal((await rejection).headers()['x-chat-rejection'], 'user_capacity');
+    await page.getByText(/Your account already has requests in progress/).waitFor();
+    await prompt.fill('Keep this new draft');
+    await page.getByRole('button', { name: 'Try again', exact: true }).click();
+    assert.equal(await prompt.inputValue(), 'Keep this new draft');
+    assert.equal(await page.locator('.message.user').getByText('capacity retry prompt', { exact: true }).count(), 1);
+    await admissionIs(1, 1);
+
+    // The oldest conversation is still active; stopping it must promote exactly
+    // the queued conversation, without affecting either conversation's timings.
+    await inProgress.nth(1).click();
 
     const stopped = page.locator('.request-diagnostics').last();
     await stopped.locator('summary').click();
@@ -62,6 +97,6 @@ export async function checkBrowserTimings(base, authFixture, admissionIs) {
     assert.ok(await milliseconds(completed, 'Upstream request') >= 0);
     await admissionIs(0, 0);
     assert.deepEqual(pageErrors, []);
-    console.log('PASS: Two conversations stream in one tab, Stop cancels only the selected reply, and timings stay with each reply');
+    console.log('PASS: Same-account conversations serialize, a distinct account streams in parallel, quota rejection preserves a new draft, and Stop/timings stay with each reply');
   } finally { await browser.close(); }
 }

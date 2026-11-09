@@ -8,11 +8,21 @@ import { DEFAULT_SETTINGS, SETTINGS_MAX, type ModelSettings } from "../src/lib/c
 
 function renderPanel(connections = initialModelConnections(), preferences: ModelSettings = { "4bit": { ...DEFAULT_SETTINGS }, bf16: { ...DEFAULT_SETTINGS } }, options: Partial<Parameters<typeof ModelSettingsPanel>[0]> = {}) {
   return renderToStaticMarkup(createElement(ModelSettingsPanel, {
-    connections, preferences, busy: false, temperature: 0.7, onTemperatureChange() {},
+    canUseAdvancedSettings: true, connections, preferences, busy: false, temperature: 0.7, onTemperatureChange() {},
     diagnosticsEnabled: { "4bit": false, bf16: false }, onDiagnosticsChange() {}, onApply() {}, onRefresh() {},
     selectedModel: "bf16", selectedAdapter: true, adapterBusy: false, onAdapterChange() {}, ...options,
   }));
 }
+
+test("normal accounts see connections and creativity without advanced controls even with stale capability flags", () => {
+  let connections = initialModelConnections();
+  for (const model of ["4bit", "bf16"] as const) connections = updateModelConnection(connections,
+    { model, mode: "live", ready: true, limits: SETTINGS_MAX, diagnosticsAvailable: true, adapterToggleAvailable: true });
+  const html = renderPanel(connections, undefined, { canUseAdvancedSettings: false,
+    diagnosticsEnabled: { "4bit": true, bf16: true }, selectedAdapter: true });
+  assert.match(html, /Model connections/); assert.match(html, /Creativity/);
+  assert.doesNotMatch(html, /<details|Advanced settings|Use trained adapter|Reuse cached prefixes|Request diagnostics|Apply settings|Reset defaults|setting-outputTokens/);
+});
 
 test("the adapter control belongs only to BF16 Advanced settings and respects selection, readiness and busy state", () => {
   let connections = initialModelConnections();
