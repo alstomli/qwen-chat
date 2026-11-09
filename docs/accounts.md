@@ -105,7 +105,7 @@ the README. The integration runner starts an external Supabase-shaped HTTP
 fixture and the Python model/gateway fixtures. It verifies OAuth provider/scopes,
 a one-use PKCE code and verifier, Google account creation/sign-in, cancellation,
 unverified/non-Google denial, same-origin fixed redirects, account isolation,
-logout/replay, cross-tab stream cancellation, images, Docs, and existing
+logout/replay, cross-tab stream cancellation, images, and existing
 concurrency/timing behavior. There is no production auth-bypass switch.
 
 These fixtures do **not** prove hosted Google consent, provider enablement, real
@@ -116,7 +116,6 @@ and anonymous sign-in are disabled in the hosted dashboard. Apply SQL before app
 cutover. Hosted Google verification remains pending until provider setup and
 real account tests are completed; a fixture pass is not a hosted login pass.
 
-Package the ignored generated `data/runpod-docs-index.json` with deployments as
-required by Docs. Merge and production deployment require separate approval.
+Normal Git deployments require no generated document index. Merge and production deployment require separate approval.
 Do not remove old environment secrets until cutover is validated; rolling back to
 shared-password code restores the old authorization model.

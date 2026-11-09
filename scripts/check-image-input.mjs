@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 
 const imageBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMIr+0AAAKLAV1gTX3oAAAAAElFTkSuQmCC', 'base64');
 const imageData = 'data:image/png;base64,' + imageBytes.toString('base64');
@@ -75,7 +77,25 @@ async function checkBrowser(base, authFixture) {
     authFixture.setNextIdentity('test@example.com');
     await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
     await page.getByRole('combobox', { name: 'Model', exact: true }).selectOption('bf16');
-    await page.getByRole('switch', { name: 'Use trained adapter', exact: true }).uncheck();
+    assert.equal(await page.getByRole('switch', { name: 'Use trained adapter', exact: true }).count(), 0, 'Adapter toggle remained in the main workspace');
+    assert.equal(await page.getByText('Runpod Docs', { exact: true }).count(), 0);
+    await page.getByRole('button', { name: /Your workspace/ }).click();
+    const bf16Settings = page.locator('details.model-settings-section').filter({ hasText: 'Qwen3.8-27B-bf16' });
+    await bf16Settings.locator('summary').focus();
+    await page.keyboard.press('Enter');
+    const adapter = bf16Settings.getByRole('switch', { name: 'Use trained adapter', exact: true });
+    assert.equal(await adapter.isChecked(), true);
+    await adapter.focus(); await page.keyboard.press('Space');
+    assert.equal(await adapter.isChecked(), false, 'Keyboard did not change the adapter setting');
+    if (process.env.CHAT_TEST_SCREENSHOT_DIR) {
+      await mkdir(process.env.CHAT_TEST_SCREENSHOT_DIR, { recursive: true });
+      await page.screenshot({ path: join(process.env.CHAT_TEST_SCREENSHOT_DIR, 'qwen-bf16-adapter-settings.png'), fullPage: true });
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
+      await page.screenshot({ path: join(process.env.CHAT_TEST_SCREENSHOT_DIR, 'qwen-bf16-adapter-settings-mobile.png'), fullPage: true });
+      await page.setViewportSize({ width: 1280, height: 900 });
+    }
+    await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
     await page.getByRole('button', { name: 'Attach image', exact: true }).waitFor();
     await page.locator('input[type=file]').setInputFiles({ name: 'fixture.png', mimeType: 'image/png', buffer: imageBytes });
     await page.locator('.composer-attachment').waitFor();
@@ -88,12 +108,20 @@ async function checkBrowser(base, authFixture) {
     const imagePayload = (await imageRequest).postDataJSON();
     assert.equal(imagePayload.model, 'bf16');
     assert.equal(imagePayload.useAdapter, false);
+    assert.equal(Object.hasOwn(imagePayload, 'docsMode'), false);
+    assert.equal(Object.hasOwn(imagePayload, 'docsPassages'), false);
     assert.match(imagePayload.image, /^data:image\/(?:jpeg|png|webp);base64,/);
     assert.equal(imagePayload.messages.at(-1).content, imagePrompt);
     await page.getByText(imageReply, { exact: true }).waitFor();
     await send.waitFor();
 
+    await page.getByRole('button', { name: /Your workspace/ }).click();
+    await bf16Settings.locator('summary').click();
+    assert.equal(await adapter.isChecked(), false, 'Settings toggle did not retain the conversation preference');
+    await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
+
     await page.reload();
+    await page.getByRole('button', { name: imagePrompt, exact: true }).click();
     await page.getByText(imageReply, { exact: true }).waitFor();
     assert.ok(await page.evaluate(() => !JSON.stringify(localStorage).includes('data:image/')));
     await page.getByRole('button', { name: 'Try again', exact: true }).click();

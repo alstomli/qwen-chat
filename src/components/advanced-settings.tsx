@@ -2,10 +2,11 @@
 import { useState } from "react";
 import { DEFAULT_SETTINGS, SETTING_FIELDS, SETTINGS_MIN, fitSettings, validateSettings, type ChatSettings } from "@/lib/chat-settings";
 
-export function AdvancedSettings({ idPrefix, value, limits, available, preview, busy, onApply, diagnosticsAvailable, diagnosticsEnabled, onDiagnosticsChange, usingLastVerifiedLimits = false }: {
+export function AdvancedSettings({ idPrefix, value, limits, available, preview, busy, onApply, diagnosticsAvailable, diagnosticsEnabled, onDiagnosticsChange, adapter, usingLastVerifiedLimits = false }: {
   idPrefix: string; usingLastVerifiedLimits?: boolean;
   value: ChatSettings; limits: ChatSettings; available: boolean; preview: boolean; busy: boolean; onApply: (settings: ChatSettings) => void;
   diagnosticsAvailable: boolean; diagnosticsEnabled: boolean; onDiagnosticsChange: (enabled: boolean) => void;
+  adapter?: { checked: boolean; disabled: boolean; help: string; onChange: (enabled: boolean) => void };
 }) {
   const [draft, setDraft] = useState(() => Object.fromEntries(SETTING_FIELDS.map(({ key }) => [key, String(value[key])])));
   const [error, setError] = useState("");
@@ -24,6 +25,14 @@ export function AdvancedSettings({ idPrefix, value, limits, available, preview, 
   }
   return <section className="advanced-settings" aria-labelledby={`${idPrefix}-advanced-settings-heading`}>
     <h3 id={`${idPrefix}-advanced-settings-heading`}>Advanced settings</h3>
+    {adapter && <div>
+      <label className="prefix-cache-setting" htmlFor={`${idPrefix}-trained-adapter`}>
+        <input id={`${idPrefix}-trained-adapter`} type="checkbox" role="switch" aria-label="Use trained adapter" checked={adapter.checked}
+          disabled={adapter.disabled} aria-describedby={`${idPrefix}-adapter-help`} onChange={event => adapter.onChange(event.target.checked)}/>
+        <span>Use trained adapter</span><strong>{adapter.checked ? "On" : "Off"}</strong>
+      </label>
+      <p id={`${idPrefix}-adapter-help`} className="settings-help">{adapter.help}</p>
+    </div>}
     {diagnosticsAvailable && <div>
       <label className="prefix-cache-setting" htmlFor={`${idPrefix}-request-diagnostics`}><input id={`${idPrefix}-request-diagnostics`} type="checkbox" role="switch" checked={diagnosticsEnabled} disabled={busy} onChange={event => onDiagnosticsChange(event.target.checked)}/><span>Request diagnostics</span></label>
       <p className="settings-help">Collect token counts and response timings for new requests in this session. Records contain no prompts or answers and are saved to a file only when you export.</p>

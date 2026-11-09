@@ -11,8 +11,9 @@ function statusLabel(connection: Connection) {
   return connection.ready ? "Ready" : "Unavailable or loading";
 }
 
-export function ModelSettingsPanel({ connections, preferences, busy, temperature, onTemperatureChange, diagnosticsEnabled, onDiagnosticsChange, onApply, onRefresh }: {
+export function ModelSettingsPanel({ connections, preferences, busy, selectedModel, selectedAdapter, adapterBusy, onAdapterChange, temperature, onTemperatureChange, diagnosticsEnabled, onDiagnosticsChange, onApply, onRefresh }: {
   connections: ModelConnections; preferences: ModelSettings; busy: boolean;
+  selectedModel: ModelId; selectedAdapter: boolean; adapterBusy: boolean; onAdapterChange: (enabled: boolean) => void;
   temperature: number; onTemperatureChange: (value: number) => void;
   diagnosticsEnabled: Record<ModelId, boolean>; onDiagnosticsChange: (model: ModelId, enabled: boolean) => void;
   onApply: (model: ModelId, value: ChatSettings) => void; onRefresh: () => void;
@@ -44,6 +45,15 @@ export function ModelSettingsPanel({ connections, preferences, busy, temperature
           available={!!verifiedLimits} usingLastVerifiedLimits={!currentLimits && !!connection.lastVerifiedLimits}
           diagnosticsAvailable={connection.diagnosticsAvailable === true} diagnosticsEnabled={diagnosticsEnabled[model.id]}
           onDiagnosticsChange={enabled => onDiagnosticsChange(model.id, enabled)} preview={connection.mode === "preview"}
+          adapter={model.id === "bf16" ? {
+            checked: selectedModel === "bf16" ? selectedAdapter : true,
+            disabled: selectedModel !== "bf16" || adapterBusy || !connection.ready || connection.adapterToggleAvailable !== true,
+            help: selectedModel !== "bf16" ? "Select the BF16 model in the chat to change its adapter."
+              : adapterBusy ? "Stop the current reply before changing its adapter."
+              : !connection.ready || connection.adapterToggleAvailable !== true ? "Connect BF16 to a gateway with adapter selection enabled to change this setting."
+              : "Applies immediately to the selected conversation or new chat. Turn off to use the BF16 base model and attach images.",
+            onChange: onAdapterChange,
+          } : undefined}
           busy={busy} onApply={value => onApply(model.id, value)}/>
       </details>;
     })}</div>

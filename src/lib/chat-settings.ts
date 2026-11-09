@@ -101,10 +101,10 @@ export function gatewaySettings(settings: ChatSettings, limits: ChatSettings): O
 }
 
 export function fitMessages<T extends { role: string; content: string }>(
-  messages: T[], settings: ChatSettings, temperature: number, model: ModelId = DEFAULT_MODEL, useAdapter?: boolean, image?: string, docsMode?: true,
+  messages: T[], settings: ChatSettings, temperature: number, model: ModelId = DEFAULT_MODEL, useAdapter?: boolean, image?: string,
 ): T[] {
   const result = [...messages];
-  const requestOverhead = jsonBytes({ model, useAdapter, messages: [], max_tokens: settings.outputTokens, temperature, settings, image, docsMode, stream: true }) - 2;
+  const requestOverhead = jsonBytes({ model, useAdapter, messages: [], max_tokens: settings.outputTokens, temperature, settings, image, stream: true }) - 2;
   const oversized = () => {
     if (result.length > settings.historyMessages) return true;
     const bytes = jsonBytes(result);

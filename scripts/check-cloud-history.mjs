@@ -64,11 +64,16 @@ export async function checkCloudHistory(base, fixture) {
     await page.evaluate(({ userId, legacyId, legacy }) => {
       localStorage.setItem(`qwen-chat.conversations.v1:user:${userId}`, JSON.stringify([{
         id: legacyId, title: legacy, updatedAt: 1, messages: [{ id: 'legacy-user', role: 'user', content: 'Local text',
-          imageName: 'legacy.png', image: 'BASE64_PRIVATE_IMAGE', diagnostics: { secret: 'PRIVATE_TOKEN' } }],
+          imageName: 'legacy.png', image: 'BASE64_PRIVATE_IMAGE', diagnostics: { secret: 'PRIVATE_TOKEN' }, docsMode: true },
+          { id: 'legacy-answer', role: 'assistant', content: 'Older source answer [1].', state: 'complete',
+            docsSources: [{ id: 1, heading: 'Idle timeout', url: 'https://docs.runpod.io/serverless/endpoints/endpoint-configurations#idle-timeout' }] }],
       }]));
     }, { userId, legacyId, legacy });
     await page.reload(); await page.getByRole('button', { name: legacy, exact: true }).waitFor();
     await page.locator('.history-local-note').filter({ hasText: 'This older conversation stays on this browser, including new replies.' }).waitFor();
+    await page.getByText('Older source answer [1].', { exact: true }).waitFor();
+    assert.equal(await page.locator('.docs-citation').count(), 0, 'Retired source metadata enabled active citation UI');
+    assert.equal(await page.getByRole('switch', { name: /Runpod Docs/ }).count(), 0);
     assert.equal(rows().has(legacyId), false);
 
     // The same Google account can enter while admission is full; a new identity cannot.
@@ -108,13 +113,35 @@ export async function checkCloudHistory(base, fixture) {
     fixture.setHistoryFailure(false); await page.getByRole('button', { name: 'Retry sync', exact: true }).click();
     await until(() => [...rows().values()].some(row => row.payload.title === offline && row.payload.messages.some(message => message.role === 'assistant' && message.state === 'complete')), 'Explicit sync retry did not recover');
 
+    assert.equal(await page.locator('.history-heading').count(), 1, 'History remained split by storage location');
+    assert.match(await page.locator('.history-heading').innerText(), /^HISTORY\s*3$/);
+    assert.deepEqual(await page.locator('.history-list .history-item > button:first-child').allTextContents(), [offline, online, legacy]);
+    await page.locator('.history-sync').getByText('Cloud history · 2 / 50 chats', { exact: true }).waitFor();
+    const search = page.getByRole('textbox', { name: 'Search conversations', exact: true });
+    await search.fill('QA ' + suffix);
+    assert.equal(await page.locator('.history-list .history-item').count(), 3, 'Unified search omitted local or cloud history');
+    await search.clear();
+    if (process.env.CHAT_TEST_SCREENSHOT_DIR) {
+      await page.screenshot({ path: join(process.env.CHAT_TEST_SCREENSHOT_DIR, 'qwen-unified-history.png'), fullPage: true });
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.getByRole('button', { name: 'Open sidebar', exact: true }).click();
+      await page.waitForFunction(() => document.querySelector('.sidebar').getBoundingClientRect().left >= 0);
+      await page.screenshot({ path: join(process.env.CHAT_TEST_SCREENSHOT_DIR, 'qwen-unified-history-mobile.png'), fullPage: true });
+      await page.getByRole('button', { name: 'Close sidebar', exact: true }).click();
+      await page.setViewportSize({ width: 1280, height: 900 });
+    }
+
     await page.getByRole('button', { name: /Your workspace/ }).click();
     const exported = JSON.parse(await downloadText(page, 'Export JSON'));
     assert.ok(exported.some(chat => chat.id === onlineRow.id && chat.messages.some(message => message.role === 'assistant')));
     assert.ok(exported.some(chat => chat.id === legacyId), 'Export omitted local legacy history');
+    const exportedLegacy = exported.find(chat => chat.id === legacyId);
+    assert.equal(exportedLegacy.messages[0].docsMode, true);
+    assert.equal(exportedLegacy.messages[1].docsSources[0].heading, 'Idle timeout');
     assert.ok(!JSON.stringify(exported).includes('BASE64_PRIVATE_IMAGE')); assert.ok(!JSON.stringify(exported).includes('PRIVATE_TOKEN'));
     const markdown = await downloadText(page, 'Export Markdown');
     assert.ok(markdown.includes(`# ${online}`)); assert.ok(markdown.includes('Image filename: legacy.png; image not included'));
+    assert.ok(markdown.includes('[1] Idle timeout: https://docs.runpod.io/'), 'Markdown export dropped historical sources');
     await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
     await page.getByRole('button', { name: `Delete ${online}`, exact: true }).click();
     await page.getByRole('button', { name: 'Delete conversation', exact: true }).click();

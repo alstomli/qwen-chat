@@ -8,13 +8,6 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const indexPath = 'data/runpod-docs-index.json';
 const manifestName = 'release-manifest.json';
-const allowedPages = new Set([
-  'https://docs.runpod.io/pods/storage/types',
-  'https://docs.runpod.io/pods/troubleshooting/zero-gpus',
-  'https://docs.runpod.io/serverless/endpoints/endpoint-configurations',
-  'https://docs.runpod.io/serverless/endpoints/send-requests',
-  'https://docs.runpod.io/storage/network-volumes',
-]);
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const git = (...args) => execFileSync('git', args, { cwd: root, maxBuffer: 32 * 1024 * 1024 });
 const assert = (ok, message) => { if (!ok) throw new Error(message); };
@@ -48,25 +41,20 @@ function checkBytes(path, bytes) {
   }
 }
 
-function checkIndex(bytes) {
-  const index = JSON.parse(bytes.toString('utf8'));
-  const terms = value => Array.isArray(value) && value.every(term => typeof term === 'string' && /^[a-z0-9]+$/.test(term)) && new Set(value).size === value.length;
-  assert(index.version === 1 && Array.isArray(index.chunks) && index.chunks.length > 0, 'Invalid Docs index version/chunks');
-  assert(index.chunks.every(chunk => chunk && typeof chunk.heading === 'string' && chunk.heading.trim() && chunk.heading.length <= 160 &&
-    typeof chunk.passage === 'string' && chunk.passage.trim() && chunk.passage.length <= 1800 && allowedPages.has(chunk.url) &&
-    terms(chunk.headingTerms) && terms(chunk.bodyTerms)), 'Docs index contains invalid chunks');
-  return { bytes: bytes.length, chunks: index.chunks.length, sha256: sha256(bytes) };
-}
-
 function checkTraces(buildDir) {
   for (const route of ['chat', 'status']) {
     const tracePath = join(buildDir, 'server', 'app', 'api', route, 'route.js.nft.json');
     assert(existsSync(tracePath), `Build trace missing: ${tracePath}; run npm run build first`);
     const trace = JSON.parse(readFileSync(tracePath, 'utf8'));
-    const included = trace.files.map(path => resolve(dirname(tracePath), path)).find(path => path === join(root, indexPath));
-    assert(included, `/api/${route} trace omits ${indexPath}`);
+    assert(trace.version === 1 && Array.isArray(trace.files) && trace.files.length > 0 && trace.files.every(path => typeof path === 'string' && path),
+      `Invalid build trace: ${tracePath}`);
+    for (const path of trace.files) {
+      const included = resolve(dirname(tracePath), path);
+      assert(included !== join(root, indexPath), `/api/${route} trace includes the retired Docs index; rebuild first`);
+      assert(existsSync(included), `/api/${route} traced file missing: ${included}`);
+    }
   }
-  console.log('PASS both API build traces include the Docs index');
+  console.log('PASS chat/status API build traces and referenced files (no Docs index required)');
 }
 
 function verifyPackage(directory) {
@@ -84,6 +72,7 @@ function verifyPackage(directory) {
   const expected = new Set([manifestName]);
   for (const file of manifest.files) {
     safePath(file.path);
+    assert(file.path !== indexPath, `Retired Docs index cannot be packaged: ${file.path}`);
     assert(!expected.has(file.path), `Duplicate package path: ${file.path}`);
     expected.add(file.path);
     const fullPath = join(directory, file.path);
@@ -102,13 +91,10 @@ function verifyPackage(directory) {
   }
   walk(directory);
   assert(expected.size === 0, 'Package entries missing');
-  assert(manifest.files.some(file => file.path === indexPath), 'Package omits Docs index');
-  const actualIndex = checkIndex(readFileSync(join(directory, indexPath)));
-  assert(JSON.stringify(actualIndex) === JSON.stringify(manifest.docsIndex), 'Manifest Docs summary mismatch');
-  console.log(`PASS package ${manifest.commit}: ${manifest.files.length} files, Docs ${actualIndex.bytes} bytes / ${actualIndex.chunks} chunks`);
+  console.log(`PASS package ${manifest.commit}: ${manifest.files.length} files`);
 }
 
-function preparePackage(destination, indexBytes, docsIndex) {
+function preparePackage(destination) {
   // Use committed blobs rather than arbitrary local files. Packaging dirty code is ambiguous.
   assert(!git('status', '--porcelain', '--untracked-files=normal').toString().trim(), 'Commit/review tracked and untracked changes before preparing a release package');
   const stagingRoot = resolve(root, '.local');
@@ -127,14 +113,12 @@ function preparePackage(destination, indexBytes, docsIndex) {
     const match = /^(\d+) blob ([a-f0-9]+)\t(.+)$/.exec(entry);
     assert(match && ['100644', '100755'].includes(match[1]), 'Package supports regular tracked files only');
     const [, mode, blob, path] = match;
-    assert(path !== manifestName && path !== indexPath, `Generated file must remain untracked: ${path}`);
-    if (forbiddenPath(path)) continue;
+    assert(path !== manifestName, `Generated file must remain untracked: ${path}`);
+    if (path === indexPath || forbiddenPath(path)) continue;
     const bytes = git('cat-file', 'blob', blob);
     checkBytes(path, bytes);
     files.push({ path, bytes: bytes.length, sha256: sha256(bytes), mode, content: bytes });
   }
-  checkBytes(indexPath, indexBytes);
-  files.push({ path: indexPath, bytes: indexBytes.length, sha256: docsIndex.sha256, mode: '100644', content: indexBytes });
   files.sort((a, b) => a.path.localeCompare(b.path));
   mkdirSync(output, { recursive: true });
   for (const file of files) {
@@ -142,7 +126,7 @@ function preparePackage(destination, indexBytes, docsIndex) {
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, file.content, { flag: 'wx', mode: file.mode === '100755' ? 0o755 : 0o644 });
   }
-  writeFileSync(join(output, manifestName), JSON.stringify({ version: 1, commit, docsIndex,
+  writeFileSync(join(output, manifestName), JSON.stringify({ version: 1, commit,
     files: files.map(({ content, ...metadata }) => metadata) }, null, 2) + '\n', { flag: 'wx' });
   verifyPackage(output);
   console.log(`Prepared local source only: ${relative(root, output)} (no upload/build/deploy)`);
@@ -156,14 +140,9 @@ try {
   } else {
     assert(args.length === 0 || (['--prepare', '--build-dir'].includes(args[0]) && args.length === 2),
       'Usage: node scripts/check-history-release.mjs [--prepare .local/<new-directory> | --build-dir <build-directory> | --verify-package <directory>]');
-    assert(git('ls-files', '--', indexPath).length === 0, 'Docs index must remain ignored, not committed');
-    git('check-ignore', '--quiet', indexPath);
-    const indexBytes = readFileSync(join(root, indexPath));
-    const docsIndex = checkIndex(indexBytes);
-    console.log(`PASS ignored Docs index: ${docsIndex.bytes} bytes / ${docsIndex.chunks} chunks / SHA256 ${docsIndex.sha256}`);
-    if (args[0] === '--prepare') preparePackage(args[1], indexBytes, docsIndex);
+    if (args[0] === '--prepare') preparePackage(args[1]);
     else if (args[0] === '--build-dir') checkTraces(resolve(root, args[1]));
-    else console.log('Next: build and check --build-dir .next; after review/commit use --prepare .local/<release-name>');
+    else console.log('No generated assets are required. Build and check --build-dir .next; after review/commit use --prepare .local/<release-name>');
   }
 } catch (error) {
   console.error(`RELEASE CHECK FAILED: ${error.message}`);
