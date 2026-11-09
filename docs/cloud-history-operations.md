@@ -197,42 +197,28 @@ and avoid periodic full-history polling. Full exports/backups also count toward
 traffic. There is no automatic egress kill switch or guarantee that Auth survives
 a provider-wide restriction; the app's storage guard only isolates its own saves.
 
-## Package the ignored Docs index
+## Release source and build checks
 
-The index intentionally remains ignored. A normal Git-based deploy omits it;
-`outputFileTracingIncludes` can include only a file already on the build machine.
-Generate/restore the approved index before building. Current reference is
-65,660 bytes / 59 chunks; the script records SHA-256 instead of assuming those
-counts never change. Regenerate explicitly with
-`python scripts/export-runpod-docs.py ../runpod-learning/docs-search` if necessary.
+Normal Git deployments need no generated document index. For a reviewed local
+source package, run:
 
 ```powershell
-node scripts/check-history-release.mjs
 npm run build
 node scripts/check-history-release.mjs --build-dir .next
-# After changes are reviewed and committed; requires a clean source tree:
-node scripts/check-history-release.mjs --prepare .local/cloud-history-source-<commit>
-node scripts/check-history-release.mjs --verify-package .local/cloud-history-source-<commit>
+# Requires a clean, committed source tree and a new destination:
+node scripts/check-history-release.mjs --prepare .local/chat-source-<commit>
+node scripts/check-history-release.mjs --verify-package .local/chat-source-<commit>
 ```
 
-The source package is a new local directory, with committed regular files read
-from Git blobs, the ignored index, and `release-manifest.json` containing source
-commit, sizes, and SHA-256 hashes. The script excludes `.env` credentials, `.git`,
-build/cache output, and known key paths, and rejects embedded private keys and
-Supabase secret/service-role tokens. Review tracked contents as well: this is not
-a universal secret detector or a cryptographic signature. `--verify-package`
-detects missing, changed, additional, and symlink entries; trust the manifest's
-provenance before relying on it.
-
-Package preparation does not install dependencies, build, upload, or deploy.
-For an approved source upload, use the verified staging directory as build input
-and inject server secrets through the deployment platform. Preserve the index
-through upload filters (including filters that honor the included `.gitignore`),
-then verify **both** API traces after building there. For Git-triggered builds,
-first add an approved reproducible index generation/artifact restoration step to
-that build pipeline; this repository does not make the ignored index appear on
-remote Git checkouts. A merge alone is not a complete Docs release path. A local
-trace pass proves inclusion in that local build, not remote artifact contents.
+The package contains committed regular source files and a manifest recording the
+source commit, sizes, and SHA-256 hashes. It excludes local/build artifacts,
+credentials, and the removed document index. Verification rejects changed,
+missing, additional, or symlink files. Review tracked contents as well; the
+credential scan is not a universal secret detector. Package preparation does not
+install, build, upload, or deploy. Inject server secrets through the hosting
+platform. Keep the existing database schema and deployed migrations unchanged
+when removing the document-search feature; legacy message metadata remains
+available for a future source integration.
 
 ## Local PostgreSQL verification
 
@@ -315,7 +301,7 @@ Before enabling production traffic, use two real Google accounts and verify:
   350 MB warning, 400 MB pause, preserved pause at 375 MB, and resume below 350 MB.
   Paused saves retain recovery data, while Auth/inference/read/delete still work.
 - Confirm Cron's first scheduled run, small paginated responses, and no background
-  full-history downloads. Verify Docs remains functional in the final package.
+  full-history downloads. Verify ordinary chat and status routes in the final package.
 
 Rollback the **app deployment** to its recorded previous version first when a
 client/API regression prevents safe operation. Keep additive 002 tables/functions

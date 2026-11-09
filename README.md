@@ -8,15 +8,15 @@ The frontend can run locally at `http://127.0.0.1:3001`; the hosted production s
 
 ## Choose a model
 
-When the BF16 gateway advertises adapter switching, a **Use trained adapter**
-switch appears below the model selector. New conversations default to On:
+When the BF16 gateway advertises adapter switching, **Use trained adapter**
+appears under **Your workspace → Qwen3.8-27B-bf16 → Advanced settings**. New conversations default to On:
 On requests the registered adapter, while Off requests the original BF16 base.
 The choice is saved per conversation; each new assistant answer records its own
 mode and is labeled **BF16 + adapter** or **BF16 base**. Changing the choice does
 not relabel earlier answers. Legacy answers retain their existing model labels
-because their original adapter state cannot be inferred. The switch is hidden
-for 4bit and for gateways that do not support the feature, and is disabled while
-an answer is generating. Switching an active conversation keeps its history;
+because their original adapter state cannot be inferred. The control is unavailable
+when BF16 is not selected or its gateway does not support switching, and is disabled while
+that conversation is generating. Switching an active conversation keeps its history;
 start fresh conversations with the same settings for a controlled comparison.
 
 Deploy the companion gateway update first, retaining the current LoRA Pod
@@ -149,6 +149,10 @@ Supabase Auth and Postgres are required for accounts. No OpenAI account is requi
 
 ### Cloud history limits and release
 
+The sidebar's **HISTORY** list combines synced and browser-only conversations in
+latest-activity order. Its count includes both; the footer reports the separate
+synced-storage quota. Opening an older local conversation explains its storage scope.
+
 New cloud history stores text, model choices, message status, image filenames,
 and citations, not image files or request diagnostics. Save operations enforce
 ownership, revisions, and quotas in Postgres. An oversized active conversation
@@ -159,26 +163,11 @@ Apply the additive cloud-history migration after the account migration, followin
 [Cloud history operations](docs/cloud-history-operations.md). Keep the existing
 Supabase Free plan; database-size and egress monitoring remain necessary even with
 the 100-account cap. The [design decision](docs/adr-cloud-history.md) explains the
-storage and retry tradeoffs. Preserve the generated Docs index in every release;
-a plain Git build does not include that ignored artifact.
-
-## Ask about Runpod Docs
-
-Turn on **Runpod Docs** in the composer to search five official Runpod documentation pages about Pod storage, zero-GPU recovery, Serverless endpoints, requests, and network volumes. The server ranks sections using the newest question and sends up to three bounded excerpts to the selected model. Numbered citations open the corresponding Runpod Docs sections. If nothing matches, the app reports that directly.
-
-Runpod Docs is off by default and works with text prompts. The switch resets when you open another conversation or reload the page. Retrying an earlier question uses that question's original Docs setting. Saved answers keep their citation links.
-
-Generate the index from the existing `runpod-learning/docs-search` folder before starting the app or building it for deployment. Run this from the `qwen-chat` repository root, adjusting the path if the lesson is elsewhere.
-
-```bash
-python scripts/export-runpod-docs.py ../runpod-learning/docs-search
-```
-
-The exporter uses the lesson's Python chunker and term tokenizer. It writes an ignored file at `data/runpod-docs-index.json`, which Next.js includes in the chat and status route traces when present during `npm run build`. Keep this generated file with the server artifact. The selected gateway must advertise `docsModeVersion: 1`. A checkout without an index or a connection to an older gateway still supports ordinary chat. Regenerate the index and restart the app after changing the corpus. Run `npm test` with the generated index present to compare the five lesson queries against the Python baseline's rankings.
+storage and retry tradeoffs. Ordinary Git deployments require no generated document index.
 
 ## Ask about an image
 
-Select **Qwen3.8-27B-bf16** and use **Attach image** to add one JPEG, PNG, or WebP to a text prompt. If **Use trained adapter** is available, switch it off to use the BF16 base model for the image request. Qwen streams a text reply through the same chat connection.
+Select **Qwen3.8-27B-bf16** and use **Attach image** to add one JPEG, PNG, or WebP to a text prompt. If **Use trained adapter** is available, open **Your workspace → Qwen3.8-27B-bf16 → Advanced settings** and switch it off to use the BF16 base model for the image request. Qwen streams a text reply through the same chat connection.
 
 The attachment control is available when the connected BF16 gateway advertises image input. The uploaded image shares the request byte budget with the text. The app keeps recent image bytes in the open tab for retry, and the saved conversation retains an attachment marker. Reattach the file to retry after a reload or to ask another question about the same image.
 

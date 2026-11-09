@@ -4,8 +4,6 @@ import { DIAGNOSTICS_HEADER, parseDiagnosticHeader } from "@/lib/diagnostics";
 import { validateInput } from "@/lib/protocol";
 import { validateSettings, gatewaySettings } from "@/lib/chat-settings";
 import { IMAGE_ACCEPTED_HEADER, IMAGE_ADAPTER_ERROR, IMAGE_UNSUPPORTED_ERROR, validateImageInput } from "@/lib/image-input";
-import { DOCS_GATEWAY_ERROR, DOCS_INDEX_ERROR, DOCS_MODE_HEADER, DOCS_SOURCES_HEADER, DOCS_UNAVAILABLE_ERROR, sectionDocsUrl, type DocsSource } from "@/lib/docs-sources";
-import { runpodDocsIndex, searchRunpodDocs } from "@/lib/runpod-docs.server";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
@@ -24,11 +22,10 @@ export async function POST(request: Request) {
   }
   catch (error) { return jsonError(error instanceof Error ? error.message : "Invalid message.", 400); }
   try {
-    const { model, docsMode, ...gatewayInput } = input;
+    const { model, ...gatewayInput } = input;
     const config = connectionConfig(model);
     if (config.mode === "unconfigured") return jsonError("The model connection hasn't been configured yet.", 503);
     if (config.mode === "preview") {
-      if (docsMode) return jsonError(DOCS_UNAVAILABLE_ERROR, 503);
       if (input.image) return jsonError(IMAGE_UNSUPPORTED_ERROR, 400);
       if (diagnosticRequested) return jsonError("Diagnostics require a live model connection.", 400);
       const encoder = new TextEncoder(); let timer: ReturnType<typeof setTimeout>; let index = 0;
@@ -49,20 +46,9 @@ export async function POST(request: Request) {
       });
       return new Response(stream, { headers: { ...streamHeaders, "X-Chat-Mode": "preview" } });
     }
-    let docsPassages: { heading: string; passage: string }[] | undefined;
-    let docsHeaders = {};
-    if (docsMode) {
-      const index = runpodDocsIndex();
-      if (!index) return jsonError(DOCS_INDEX_ERROR, 503);
-      const hits = searchRunpodDocs(index, input.messages.at(-1)!.content);
-      docsPassages = hits.map(({ heading, passage }) => ({ heading, passage }));
-      const sources: DocsSource[] = hits.map(({ heading, url }, index) => ({ id: index + 1, heading, url: sectionDocsUrl(url, heading) }));
-      docsHeaders = { [DOCS_MODE_HEADER]: "1", [DOCS_SOURCES_HEADER]: encodeURIComponent(JSON.stringify(sources)) };
-    }
     let settings;
     try {
       const capabilities = await gatewayCapabilities(config);
-      if (docsMode && capabilities.docsModeVersion !== 1) return jsonError(DOCS_GATEWAY_ERROR, 503);
       if (input.image) {
         if (!capabilities.imageInput) return jsonError(IMAGE_UNSUPPORTED_ERROR, 400);
         if (capabilities.adapterToggleAvailable && input.useAdapter !== false) return jsonError(IMAGE_ADAPTER_ERROR, 400);
@@ -74,25 +60,7 @@ export async function POST(request: Request) {
       settings = gatewaySettings(input.settings, capabilities.limits);
     }
     catch (error) { return jsonError(error instanceof Error ? error.message : "Gateway settings unavailable.", 400); }
-    if (docsPassages?.length === 0) {
-      const content = "I couldn’t find a matching passage in the available Runpod Docs. Try a more specific Runpod question.";
-      const chunk = JSON.stringify({ choices: [{ delta: { content } }] });
-      return new Response(`data: ${chunk}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n`,
-        { headers: { ...streamHeaders, ...docsHeaders } });
-    }
-    const payload = { ...gatewayInput, settings, stream: true, docsPassages };
-    let body = JSON.stringify(payload);
-    let docsTrimmed = 0;
-    if (docsMode && Buffer.byteLength(body) > input.settings.requestBytes) {
-      payload.messages = [...payload.messages];
-      while (payload.messages.length > 1 && Buffer.byteLength(body) > input.settings.requestBytes) {
-        payload.messages.splice(0, 2);
-        docsTrimmed += 2;
-        body = JSON.stringify(payload);
-      }
-      if (Buffer.byteLength(body) > input.settings.requestBytes)
-        return jsonError("Your message and Runpod Docs excerpts exceed the request byte limit. Shorten the message or raise the limit.", 413);
-    }
+    const body = JSON.stringify({ ...gatewayInput, settings, stream: true });
     const controller = new AbortController();
     let timedOut = false;
     const cancel = () => controller.abort();
@@ -111,12 +79,11 @@ export async function POST(request: Request) {
     }
     const imageVerified = !input.image || upstream.headers.get(IMAGE_ACCEPTED_HEADER) === "true";
     const adapterVerified = input.useAdapter === undefined || upstream.headers.get("X-Chat-Adapter-Enabled") === String(input.useAdapter);
-    const docsVerified = !docsMode || upstream.headers.get(DOCS_MODE_HEADER) === "1";
-    if (upstream.ok && (!imageVerified || !adapterVerified || !docsVerified)) {
+    if (upstream.ok && (!imageVerified || !adapterVerified)) {
       clearTimeout(timer); request.signal.removeEventListener("abort", cancel);
       await upstream.body?.cancel(); controller.abort();
       return jsonError(!imageVerified ? "The model did not confirm receipt of the attached image."
-        : !adapterVerified ? "The selected adapter mode could not be verified." : "Runpod Docs mode could not be verified at the gateway.", 503);
+        : "The selected adapter mode could not be verified.", 503);
     }
     const diagnostic = diagnosticRequested ? parseDiagnosticHeader(upstream.headers.get(DIAGNOSTICS_HEADER)) : null;
     const diagnosticHeaders: Record<string, string> = diagnostic ? { [DIAGNOSTICS_HEADER]: JSON.stringify(diagnostic) } : {};
@@ -150,10 +117,10 @@ export async function POST(request: Request) {
       }, async cancel() { cancel(); finish(); await reader.cancel().catch(() => {}); }
     });
     const upstreamTrimmed = upstream.headers.get("X-Context-Trimmed") ?? "0";
-    return new Response(stream, { headers: { ...streamHeaders, ...diagnosticHeaders, ...docsHeaders,
+    return new Response(stream, { headers: { ...streamHeaders, ...diagnosticHeaders,
       ...(input.useAdapter === undefined ? {} : { "X-Chat-Adapter-Enabled": String(input.useAdapter) }),
       ...(input.image ? { [IMAGE_ACCEPTED_HEADER]: "true" } : {}),
-      "X-Context-Trimmed": docsTrimmed ? String(docsTrimmed + (Number(upstreamTrimmed) || 0)) : upstreamTrimmed } });
+      "X-Context-Trimmed": upstreamTrimmed } });
   } catch { return jsonError("Couldn't reach your model. It may be stopped or loading. Please try again.", 503); }
 }
 function previewReply(prompt: string) {

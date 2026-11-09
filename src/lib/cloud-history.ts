@@ -1,4 +1,4 @@
-import { parseDocsSources } from "./docs-sources";
+import { parseSourceMetadata } from "./history-metadata";
 import { isModelId } from "./models";
 import type { Conversation, Message } from "./storage";
 
@@ -22,7 +22,7 @@ export function cloudPayload(chat: Conversation): Pick<Conversation, "title" | "
         state: m.state, model: isModelId(m.model) ? m.model : undefined,
         useAdapter: typeof m.useAdapter === "boolean" ? m.useAdapter : undefined,
         note: m.state === "error" ? "The reply failed. Please retry." : m.state === "stopped" ? "You stopped this reply." : undefined,
-        docsSources: parseDocsSources(m.docsSources),
+        docsSources: parseSourceMetadata(m.docsSources),
       }),
     })),
   };

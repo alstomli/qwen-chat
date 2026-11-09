@@ -88,7 +88,7 @@ test('repeated sign-out disposal preserves local recovery and clears retry opera
   pending.reject(new Error('late network failure')); await turn(); assert.equal(records.get('qa:user:alice'),saved);
 });
 
-test('payload keeps terminal text, filename and verified citations but omits unfinished tokens and arbitrary data',async()=>{
+test('payload keeps terminal text and historical metadata but omits unfinished tokens and arbitrary data',async()=>{
   const c=chat(); c.messages.push({id:'stream',role:'assistant',content:'partial'}, {id:'answer',role:'assistant',content:'text',state:'error',note:'secret gateway URL',model:'bf16',useAdapter:false});
   (c as Conversation & {image:string}).image='base64-image';
   const payload=cloudPayload(c); assert.equal(payload.messages.length,2); assert.ok(!JSON.stringify(payload).includes('partial')); assert.ok(!JSON.stringify(payload).includes('secret gateway')); assert.ok(!JSON.stringify(payload).includes('base64-image'));
@@ -132,5 +132,28 @@ test('deleting an uncertain creation after sign-out removes its possible cloud c
   await restored.store.remove(c.id); await turn();
   assert.deepEqual(calls,['delete_chat']); assert.equal(restored.store.entries.has(c.id),false);
   pending.resolve({data:{status:'saved',revision:1,evicted:[],usage},error:null}); await turn();
+  restored.store.dispose();
+});
+
+test('cloud load, later save and durable restore preserve older source metadata', async()=>{
+  const sources=[{id:1,heading:'Idle timeout',url:'https://docs.runpod.io/serverless/endpoints/endpoint-configurations#idle-timeout'}];
+  const c=chat(); c.messages[0].docsMode=true;
+  c.messages.push({id:'answer',role:'assistant',content:'An older answer [1].',state:'complete',docsSources:sources});
+  let saved:Record<string,unknown>|undefined;
+  const {store,storage}=harness(async(name,args)=>{
+    if(name==='get_chat_history') return {data:{payload:cloudPayload(c),revision:1,totalMessages:2,updatedAt:c.updatedAt},error:null};
+    if(name==='save_chat') {saved=args; return {data:{status:'saved',revision:2,evicted:[],usage},error:null};}
+    return {data:usage,error:null};
+  });
+  store.entries.set(c.id,{...snapshot(c),loaded:false});
+  const loaded=await store.load(c.id); assert.ok(loaded);
+  assert.equal(loaded.messages[0].docsMode,true); assert.deepEqual(loaded.messages[1].docsSources,sources);
+  store.stage({...loaded,title:'Continued older chat'}); await turn();
+  const payload=saved?.p_payload as ReturnType<typeof cloudPayload>;
+  assert.equal(payload.messages[0].docsMode,true); assert.deepEqual(payload.messages[1].docsSources,sources);
+  const copy=storage.getItem('qa:user:alice'); store.dispose();
+  const restored=harness(async()=>({data:null,error:'offline'}));
+  restored.storage.setItem('qa:user:alice',copy!); restored.store.restore();
+  assert.deepEqual(restored.store.entries.get(c.id)?.chat.messages[1].docsSources,sources);
   restored.store.dispose();
 });

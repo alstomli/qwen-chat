@@ -2,7 +2,7 @@ const MIME_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
 const MAX_BYTES = 256 * 1024;
 const MAX_DIMENSION = 2048;
 export const IMAGE_ACCEPTED_HEADER = "X-Chat-Image-Accepted";
-export const IMAGE_ADAPTER_ERROR = "Turn off the trained adapter to attach an image.";
+export const IMAGE_ADAPTER_ERROR = "Turn off Use trained adapter in Your workspace → BF16 → Advanced settings to attach an image.";
 export const IMAGE_UNSUPPORTED_ERROR = "This model connection does not accept images.";
 
 export type ImageInputLimits = {

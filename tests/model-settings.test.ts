@@ -6,12 +6,30 @@ import { ModelSettingsPanel } from "../src/components/model-settings-panel";
 import { allModelStatusRequests, initialModelConnections, updateModelConnection, type Connection } from "../src/lib/model-status";
 import { DEFAULT_SETTINGS, SETTINGS_MAX, type ModelSettings } from "../src/lib/chat-settings";
 
-function renderPanel(connections = initialModelConnections(), preferences: ModelSettings = { "4bit": { ...DEFAULT_SETTINGS }, bf16: { ...DEFAULT_SETTINGS } }) {
+function renderPanel(connections = initialModelConnections(), preferences: ModelSettings = { "4bit": { ...DEFAULT_SETTINGS }, bf16: { ...DEFAULT_SETTINGS } }, options: Partial<Parameters<typeof ModelSettingsPanel>[0]> = {}) {
   return renderToStaticMarkup(createElement(ModelSettingsPanel, {
     connections, preferences, busy: false, temperature: 0.7, onTemperatureChange() {},
     diagnosticsEnabled: { "4bit": false, bf16: false }, onDiagnosticsChange() {}, onApply() {}, onRefresh() {},
+    selectedModel: "bf16", selectedAdapter: true, adapterBusy: false, onAdapterChange() {}, ...options,
   }));
 }
+
+test("the adapter control belongs only to BF16 Advanced settings and respects selection, readiness and busy state", () => {
+  let connections = initialModelConnections();
+  connections = updateModelConnection(connections, { model: "bf16", mode: "live", ready: true, limits: SETTINGS_MAX, adapterToggleAvailable: true });
+  const html = renderPanel(connections);
+  assert.equal((html.match(/aria-label="Use trained adapter"/g) ?? []).length, 1);
+  const sections = html.split('<details class="model-settings-section">').slice(1);
+  assert.doesNotMatch(sections[0], /Use trained adapter/);
+  assert.match(sections[1], /Advanced settings/);
+  assert.match(sections[1], /aria-label="Use trained adapter"[^>]*checked/);
+  assert.doesNotMatch(sections[1].match(/<input[^>]*aria-label="Use trained adapter"[^>]*>/)?.[0] ?? "", /disabled/);
+  for (const options of [{ selectedModel: "4bit" as const }, { adapterBusy: true }]) {
+    assert.match(renderPanel(connections, undefined, options).match(/<input[^>]*aria-label="Use trained adapter"[^>]*>/)?.[0] ?? "", /disabled/);
+  }
+  connections = updateModelConnection(connections, { model: "bf16", mode: "live", ready: false });
+  assert.match(renderPanel(connections).match(/<input[^>]*aria-label="Use trained adapter"[^>]*>/)?.[0] ?? "", /disabled/);
+});
 
 test("both expandable settings have independent values and unique associated input IDs with identical caps", () => {
   let connections = initialModelConnections();
