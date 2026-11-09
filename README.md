@@ -124,7 +124,7 @@ cd D:\AILearn\qwen-chat
 ```
 
 Then configure Supabase and apply the account migration using [Account setup](docs/accounts.md).
-Open http://127.0.0.1:3001 and choose **Continue with Google**. New Google users get an account automatically.
+Open http://127.0.0.1:3001 and choose **Continue with Google**. New Google users get an account automatically while registration has capacity (100 accounts maximum); existing users can still sign in when full.
 The setup script preserves existing `.env.local`; replace legacy login settings with the Supabase public variables in `.env.example`.
 
 On another machine with Node.js 22 or newer:
@@ -145,7 +145,22 @@ Supabase Auth and Postgres are required for accounts. No OpenAI account is requi
 - Persistent Advanced settings for input characters, output tokens, context tokens, history messages/bytes, request bytes, generation timeout, and safety tokens, plus adjustable creativity.
 - Public Google sign-in/signup, server-verified Google identities, live Supabase sessions, same-origin mutation checks, and bounded request bodies.
 - Live readiness checks and clear offline, loading, interrupted, and context-limit messages.
-- Conversations are scoped per account in this browser's local storage, not synced between devices or encrypted by the app. In live mode the selected conversation history is sent through the Vercel server and Runpod gateway to your model. The app and gateway do not log prompts or replies; hosting platforms may retain operational metadata.
+- New conversations sync through Supabase, scoped to the signed-in account. Each account retains at most 50 conversations or 2,000,000 bytes of content and metadata; oldest-message conversations are replaced when necessary. Pre-existing browser history remains local even when continued. Local pending saves are labeled and can be exported. This is not end-to-end encrypted storage. In live mode the selected conversation context is sent through the Vercel server and Runpod gateway to your model; hosting platforms may retain operational metadata.
+
+### Cloud history limits and release
+
+New cloud history stores text, model choices, message status, image filenames,
+and citations, not image files or request diagnostics. Save operations enforce
+ownership, revisions, and quotas in Postgres. An oversized active conversation
+is retained locally instead of being silently truncated. Settings remain local.
+Export important chats as JSON or Markdown before rolling retention removes them.
+
+Apply the additive cloud-history migration after the account migration, following
+[Cloud history operations](docs/cloud-history-operations.md). Keep the existing
+Supabase Free plan; database-size and egress monitoring remain necessary even with
+the 100-account cap. The [design decision](docs/adr-cloud-history.md) explains the
+storage and retry tradeoffs. Preserve the generated Docs index in every release;
+a plain Git build does not include that ignored artifact.
 
 ## Ask about Runpod Docs
 

@@ -226,3 +226,23 @@
 
 @font-face{font-family:"Google Sans";font-style:normal;font-weight:500;font-display:swap;src:url("/fonts/google-sans-medium.woff2") format("woff2")}
 .google-sign-in .login-main>p{color:#59664e;line-height:1.7}.google-button{width:100%;min-height:46px;padding:12px;display:flex;align-items:center;justify-content:center;gap:10px;background:#fff;color:#1f1f1f;border:1px solid #747775;border-radius:4px;font-family:"Google Sans",Arial,sans-serif;font-size:14px;font-weight:500;line-height:20px}.google-button svg{flex-shrink:0}.google-button:hover:not(:disabled){background:#f8faff}.google-button:disabled{opacity:.6;cursor:default}.google-button:focus-visible,.account-note a:focus-visible,.privacy-back:focus-visible{outline:3px solid #486b36;outline-offset:4px}.account-note{font-size:13px;color:#59664e;line-height:1.7;margin-top:20px}.account-note a,.privacy-back{text-decoration:underline;text-underline-offset:3px}.google-sign-in .form-error{color:#854322;font-size:13px}.google-sign-in .account-message{font-size:13px;color:#466039}.privacy-main{width:700px;max-width:100%;margin:55px auto;color:#46523c}.privacy-main h1{font-family:var(--serif);font-weight:400;font-size:40px;line-height:1.2;margin:20px 0 32px}.privacy-main h2{font-size:17px;margin:28px 0 10px}.privacy-main p{font-size:14px;line-height:1.8}.privacy-back{display:inline-block;margin-top:28px;font-size:14px}@media(max-width:400px){.login-footer{align-items:flex-start;flex-direction:column;gap:12px}.google-sign-in .login-main h1{font-size:42px}.privacy-main h1{font-size:34px}}
+/* Cloud history status uses the existing sidebar and settings surfaces. */
+.history-notice { margin: 0 15px 12px; padding: 12px; background: #f0ede6; border-radius: 10px; color: #625e56; font-size: 11px; line-height: 1.55; }
+.history-notice p, .history-sync p { margin: 0 0 5px; }
+.history-notice button, .history-sync button, .history-local-note button { background: none; border: 0; color: #715345; cursor: pointer; text-decoration: underline; padding: 4px 0; font: inherit; }
+.history-notice button:focus-visible, .history-sync button:focus-visible, .history-local-note button:focus-visible { outline: 2px solid #826956; outline-offset: 3px; }
+.history-sync { color: #777167; font-size: 11px; line-height: 1.4; padding: 4px 9px 8px; }
+.history-sync .private-note { padding: 2px 0 6px; }
+.history-sync p { padding-left: 24px; }
+.history-sync button { margin-left: 24px; }
+.local-heading { margin-top: 18px; }
+.history-local-note { padding: 9px 24px; background: #f7f1e5; color: #6c5944; font-size: 12px; line-height: 1.5; display: flex; align-items: center; flex-wrap: wrap; gap: 5px 16px; }
+.history-loading { padding: 32px; text-align: center; color: #777167; }
+.history-settings { border-top: 1px solid #e6e1d8; margin-top: 22px; padding-top: 16px; }
+.history-settings h3 { font-size: 14px; margin: 0 0 8px; }
+.history-export-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+@media (max-height: 650px) {
+  .sidebar { overflow-y: auto; }
+  .sidebar > * { flex-shrink: 0; }
+  .sidebar .history-list { flex: 1 0 180px; }
+}

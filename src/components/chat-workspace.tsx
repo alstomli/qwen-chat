@@ -14,6 +14,8 @@ import { remarkDocsCitations } from "@/lib/docs-citations";
 import { IMAGE_ACCEPTED_HEADER, IMAGE_ADAPTER_ERROR, validateImageInput } from "@/lib/image-input";
 import { prepareImage, type ImageAttachment } from "@/lib/prepare-image";
 import { completedHistory, parseConversations, STORAGE_KEY, type Conversation, type Message } from "@/lib/storage";
+import { exportHistory, HISTORY_NOTICE_KEY, type SaveState } from "@/lib/cloud-history";
+import { useCloudHistory } from "@/lib/use-cloud-history";
 
 import { browserAuth } from "@/lib/supabase/browser";
 import { accountStorageKey } from "@/lib/account-storage";
@@ -33,6 +35,12 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
   const settingsKey = accountStorageKey(SETTINGS_KEY, userId);
   const modelSettingsKey = accountStorageKey(MODEL_SETTINGS_KEY, userId);
   const [chats, setChats] = useState<Conversation[]>([]); const [loaded, setLoaded] = useState(false);
+  const legacyIds = useRef(new Set<string>());
+  const legacySnapshot = useRef<Conversation[] | null>(null);
+  const [legacyDurable, setLegacyDurable] = useState(true);
+  const [historyNotice, setHistoryNotice] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null); const [draft, setDraft] = useState(""); const [search, setSearch] = useState("");
   const [attachment, setAttachment] = useState<ImageAttachment | null>(null);
   const [docsMode, setDocsMode] = useState(false);
@@ -64,6 +72,7 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
       ? { ...record, browserTimings: { ...record.browserTimings, firstRenderMs: observed - record.browserStartedAt } } : record));
   }, []);
   const controllers = useRef(new Map<string, AbortController>());
+  const cloud = useCloudHistory(userId, authenticated, loaded, legacyIds, chats, setChats, setToast, controllers);
   const textarea = useRef<HTMLTextAreaElement>(null); const searchInput = useRef<HTMLInputElement>(null); const bottom = useRef<HTMLDivElement>(null); const scroller = useRef<HTMLDivElement>(null); const follow = useRef(true); const dialog = useRef<HTMLDivElement>(null);
   const active = chats.find(c => c.id === activeId); const messages = active?.messages ?? [];
   const busy = activeId !== null && streamingChats.has(activeId);
@@ -90,7 +99,7 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
 
   useEffect(() => {
     if (!authenticated) return;
-    try { const stored = parseConversations(localStorage.getItem(storageKey)); setChats(stored); setActiveId(stored[0]?.id ?? null); setDocsMode(false); setDiagnosticRecords([]); setDiagnosticsEnabled({ "4bit": false, bf16: false }); }
+    try { const stored = parseConversations(localStorage.getItem(storageKey)); legacyIds.current = new Set(stored.map(chat => chat.id)); setChats(stored); setActiveId(stored[0]?.id ?? null); setDocsMode(false); setDiagnosticRecords([]); setDiagnosticsEnabled({ "4bit": false, bf16: false }); setHistoryNotice(localStorage.getItem(accountStorageKey(HISTORY_NOTICE_KEY, userId)) !== "dismissed"); }
     catch { setToast("Your browser couldn't load saved conversations."); }
     try {
       const raw = localStorage.getItem(settingsKey);
@@ -102,8 +111,10 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
   }, [authenticated]);
   useEffect(() => {
     if (!loaded || !authenticated) return;
-    try { localStorage.setItem(storageKey, JSON.stringify(chats)); }
-    catch { setToast("Browser storage is full. This conversation will only be available in this tab."); }
+    const local = chats.filter(chat => legacyIds.current.has(chat.id));
+    if (legacySnapshot.current?.length === local.length && local.every((chat, index) => legacySnapshot.current?.[index] === chat)) return;
+    try { localStorage.setItem(storageKey, JSON.stringify(local)); legacySnapshot.current = local; setLegacyDurable(true); }
+    catch { setLegacyDurable(false); setToast("Browser storage is full. This conversation will only be available in this tab."); }
   }, [chats, loaded, authenticated]);
   useEffect(() => {
     if (!loaded || !authenticated) return;
@@ -162,6 +173,10 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
       setRetryImageId(pending?.retryId ?? null);
     }
     setSidebar(false); follow.current = true;
+    if (id && cloud?.entries.get(id)?.loaded === false) {
+      setHistoryLoading(id);
+      void cloud.load(id).catch(error => setToast(error instanceof Error ? error.message : "Couldn't load this conversation.")).finally(() => setHistoryLoading(current => current === id ? null : current));
+    }
     return true;
   }
   function newChat() {
@@ -206,7 +221,7 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
   async function send(text = draft, retryId: string | null = retryImageId, image = attachment, enableDocs = docsMode) {
     const submitted = performance.now();
     text = text.trim(); if (!text || (activeId && controllers.current.has(activeId))) return;
-    if (chats.length >= 100 && !activeId) { setToast("You have 100 saved chats. Delete one before starting another."); return; }
+    if (activeId && cloud?.entries.get(activeId)?.loaded === false) { setToast("Load this conversation before adding a message."); return; }
     if (!connection.ready || !connection.limits) { setToast(connection.error ?? "Wait for the server limits to be verified before sending."); return; }
     if (enableDocs && !docsAvailable) { setToast(DOCS_UNAVAILABLE_ERROR); return; }
     if (selectedModel === "bf16" && selectedAdapter === false && !adapterAvailable) { setToast("Adapter selection is unavailable. Reconnect or start a new conversation."); return; }
@@ -319,6 +334,7 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
     void send(message.content, message.id, image ?? null, message.docsMode === true);
   }
   function deleteConversation() {
+    if (deleting && !legacyIds.current.has(deleting)) void cloud?.remove(deleting);
     if (deleting) controllers.current.get(deleting)?.abort();
     setChats(prev => prev.filter(c => c.id !== deleting));
     for (const [messageId, image] of sentImages.current) {
@@ -332,14 +348,15 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
     for (const request of controllers.current.values()) request.abort();
     const { error } = await browserAuth().auth.signOut({ scope: "local" });
     if (error) { setToast("Couldn't sign out. Please try again."); return; }
+    cloud?.dispose(true);
     setAuthenticated(false);
   }
   useEffect(() => {
     const { data: { subscription } } = browserAuth().auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_OUT" || (event === "INITIAL_SESSION" && !session) || (session && (session.user.id !== userId || !session.user.email_confirmed_at))) setAuthenticated(false);
+      if (event === "SIGNED_OUT" || (event === "INITIAL_SESSION" && !session) || (session && (session.user.id !== userId || !session.user.email_confirmed_at))) { cloud?.dispose(true); setAuthenticated(false); }
     });
     return () => subscription.unsubscribe();
-  }, [userId]);
+  }, [userId, cloud]);
   useEffect(() => {
     if (authenticated) return;
     for (const request of controllers.current.values()) request.abort();
@@ -355,6 +372,35 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   }
 
+  const activeEntry = activeId ? cloud?.entries.get(activeId) : undefined;
+  const localStates: SaveState[] = ["local", "oversized", "conflict", "deleted", "expired", "create_limited"];
+  const isLocal = (chat: Conversation) => legacyIds.current.has(chat.id) || localStates.includes(cloud?.entries.get(chat.id)?.state ?? "saved");
+  const hasPending = [...cloud?.entries.values() ?? []].some(entry => entry.state === "pending" || entry.deleting);
+  const hasSaving = [...cloud?.entries.values() ?? []].some(entry => entry.state === "saving");
+  const saveLabel = !cloud?.ready ? "Loading history…" : !cloud.durable || !legacyDurable ? "Not saved · Browser storage unavailable" : hasPending ? "Saved on this browser · Sync pending" : hasSaving ? "Saving…" : cloud.offline ? "Cloud history unavailable" : "Saved";
+  const localChats = chats.filter(isLocal), cloudChats = chats.filter(chat => !isLocal(chat));
+  function dismissHistoryNotice() {
+    setHistoryNotice(false);
+    try { localStorage.setItem(accountStorageKey(HISTORY_NOTICE_KEY, userId), "dismissed"); } catch {}
+  }
+  async function downloadHistory(format: "json" | "md", all = false) {
+    setExporting(true);
+    try {
+      const selected = all ? chats : active ? [active] : [];
+      const complete: Conversation[] = [];
+      for (const chat of selected) {
+        const entry = cloud?.entries.get(chat.id);
+        const full = entry && !entry.loaded ? await cloud!.load(chat.id) : chat;
+        if (full) complete.push(full);
+      }
+      exportHistory(complete, format);
+    } catch (error) { setToast(error instanceof Error ? error.message : "Couldn't export history. Try again."); }
+    finally { setExporting(false); }
+  }
+  function historyRow(chat: Conversation) {
+    return <div className={`history-item ${chat.id === activeId ? "active" : ""}`} key={chat.id}><button className="history-link" onClick={() => switchConversation(chat.id)}>{streamingChats.has(chat.id) ? <LoaderCircle size={15} className="spin" aria-hidden="true"/> : <MessageSquare size={15}/>}<span>{chat.title}</span>{streamingChats.has(chat.id) && <span className="sr-only">Reply in progress</span>}</button><button className="delete-chat" aria-label={`Delete ${chat.title}`} onClick={() => setDeleting(chat.id)}><Trash2 size={14}/></button></div>;
+  }
+
   if (!authenticated) return <div className="login-page"><p>Returning to sign in...</p><a href="/sign-in">Sign in</a></div>;
 
   return <div className="workspace">
@@ -363,15 +409,20 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
       <div className="sidebar-brand"><button className="wordmark" onClick={newChat} aria-label="Qwen home">{logo}<span>qwen<span className="brand-dot">.</span></span></button><button className="icon-button mobile-only" onClick={() => setSidebar(false)} aria-label="Close sidebar"><PanelLeftClose size={18}/></button><span className="personal-tag">PERSONAL</span></div>
       <button className="new-chat" onClick={newChat}><Plus size={17}/> New conversation <span>↗</span></button>
       <div className="search-chats"><Search size={15}/><input ref={searchInput} aria-label="Search conversations" placeholder="Search conversations" value={search} onChange={e => setSearch(e.target.value)}/><kbd>⌘ K</kbd></div>
-      <div className="history-heading">YOUR CONVERSATIONS<span>{chats.length.toString().padStart(2, "0")}</span></div>
-      <div className="history-list">{chats.filter(c => c.title.toLowerCase().includes(search.toLowerCase())).map(chat => <div className={`history-item ${chat.id === activeId ? "active" : ""}`} key={chat.id}><button className="history-link" onClick={() => switchConversation(chat.id)}>{streamingChats.has(chat.id) ? <LoaderCircle size={15} className="spin" aria-hidden="true"/> : <MessageSquare size={15}/>}<span>{chat.title}</span>{streamingChats.has(chat.id) && <span className="sr-only">Reply in progress</span>}</button><button className="delete-chat" aria-label={`Delete ${chat.title}`} onClick={() => setDeleting(chat.id)}><Trash2 size={14}/></button></div>)}{!chats.length && <div className="empty-history"><MessageSquare size={23} strokeWidth={1.3}/><p>Good conversations<br/>start with a little curiosity.</p><span>Your chats will appear here.</span></div>}{chats.length > 0 && !chats.some(c => c.title.toLowerCase().includes(search.toLowerCase())) && <p className="no-results">No conversations found.</p>}</div>
-      <div className="sidebar-bottom"><div className="private-note"><ShieldCheck size={15}/><span>Saved only in this browser</span></div><button className="profile-button" onClick={() => setSettings(true)}><span className="avatar">{email[0]?.toUpperCase()}</span><span><strong>Your workspace</strong><small>{email}</small></span><Settings2 size={17}/></button></div>
+      <div className="history-heading">CLOUD HISTORY<span>{cloud?.usage.count ?? 0} / 50</span></div>
+      <div className="history-list">{historyNotice && <div className="history-notice"><p>New chats sync across devices. Cloud history keeps up to 50 chats or 2 MB. When full, chats with the oldest last message are removed, except the chat being saved. Images aren’t saved.</p><button onClick={dismissHistoryNotice}>Got it</button></div>}
+      {cloudChats.filter(c => c.title.toLowerCase().includes(search.toLowerCase())).map(historyRow)}
+        {localChats.length > 0 && <><div className="history-heading local-heading">ON THIS BROWSER<span>{localChats.length}</span></div>{localChats.filter(c => c.title.toLowerCase().includes(search.toLowerCase())).map(historyRow)}</>}
+        {!chats.length && <div className="empty-history"><MessageSquare size={23} strokeWidth={1.3}/><p>Good conversations<br/>start with a little curiosity.</p><span>Your chats will appear here.</span></div>}{chats.length > 0 && !chats.some(c => c.title.toLowerCase().includes(search.toLowerCase())) && <p className="no-results">No conversations found.</p>}</div>
+      <div className="sidebar-bottom"><div className="history-sync"><div className="private-note"><ShieldCheck size={15}/><span>Cloud history · {cloud?.usage.count ?? 0} / 50 chats</span></div><p>{cloud?.offline ? "Last known usage · " : ""}{((cloud?.usage.bytes ?? 0) / 1_000_000).toFixed(2)} MB / 2 MB <span className="sr-only">({cloud?.usage.bytes ?? 0} of 2,000,000 UTF-8 bytes)</span></p><p role="status">{saveLabel}</p>{hasPending && <button onClick={() => { void cloud?.retry(); }}>Retry sync</button>}{cloud?.offline && !hasPending && <button onClick={() => { void cloud.refresh(); }}>Retry loading history</button>}</div><button className="profile-button" onClick={() => setSettings(true)}><span className="avatar">{email[0]?.toUpperCase()}</span><span><strong>Your workspace</strong><small>{email}</small></span><Settings2 size={17}/></button></div>
     </aside>
     <div className="main-shell">
       <header className="workspace-header"><div className="workspace-heading"><button className="icon-button mobile-only" onClick={() => setSidebar(true)} aria-label="Open sidebar"><Menu size={20}/></button><span className="header-label">Personal workspace</span><span className="header-slash">/</span><label className="model-picker"><span className="sr-only">Model</span><select aria-label="Model" value={selectedModel} disabled={busy} onChange={e => selectModel(e.target.value as ModelId)}>{MODELS.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}</select><ChevronDown size={14} aria-hidden="true"/></label></div><button className={`connection-pill ${connection.mode === "live" && connection.ready ? "online" : preview ? "preview" : "offline"}`} onClick={() => setSettings(true)}><span/>{preview ? "Local preview" : connection.mode === "checking" ? "Connecting" : connection.mode === "unconfigured" ? "Setup needed" : connection.ready ? "Model online" : "Model offline"}<ArrowUpRight size={13}/></button></header>
       {adapterAvailable && <div className="adapter-controls"><label className="adapter-toggle"><input type="checkbox" role="switch" aria-label="Use trained adapter" checked={selectedAdapter} disabled={busy || !connection.ready} onChange={event => selectAdapter(event.target.checked)}/><span>Use trained adapter</span><strong>{selectedAdapter ? "On" : "Off"}</strong></label><span>{selectedAdapter ? "BF16 + adapter" : "BF16 base"}</span></div>}
+      {active && isLocal(active) && <div className="history-local-note" role="status">{(legacyIds.current.has(active.id) ? !legacyDurable : !cloud?.durable) ? "Browser storage is unavailable. This copy is only in this tab; export it now to keep it." : legacyIds.current.has(active.id) ? "This older conversation stays on this browser, including new replies." : activeEntry?.state === "oversized" && !cloud?.durable ? "This chat is too large for cloud history and browser storage is unavailable. Export it now to keep a copy." : activeEntry?.state === "oversized" ? "This chat is too large for cloud history. It’s saved on this browser; export it to keep a copy." : activeEntry?.state === "conflict" ? "This chat changed on another device. Your unsynced copy stays on this browser." : activeEntry?.state === "create_limited" ? "Too many recent cloud chat changes. This chat stays on this browser; try a new chat later." : "This chat stays on this browser. Export it to keep a copy."}<button disabled={exporting} onClick={() => { void downloadHistory("json"); }}>Export JSON</button><button onClick={newChat}>Start new chat</button></div>}
+      {cloud?.usage.paused && <div className="history-local-note" role="status">{cloud.durable ? "Cloud saving is temporarily paused. Your conversations stay on this browser until sync resumes. You can keep chatting, export, or delete history." : "Cloud saving is paused and browser storage is unavailable. Export your conversations now to keep a copy. You can keep chatting or delete history."}</div>}
       <main className={`chat-main ${messages.length ? "has-messages" : ""}`} ref={scroller} onScroll={() => { const el = scroller.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>
-        {!messages.length ? <div className="welcome"><div className="welcome-mark" aria-hidden="true"><span>✳</span><i/></div><div className="eyebrow">A FRESH CONVERSATION</div><h1>A little curiosity.<br/><em>A lot of possibility.</em></h1><p>Your space to think, write, and work things out.</p><div className="starter-grid">{starters.map(card => <button className="starter-card" key={card.label} onClick={() => { setDraft(card.text); textarea.current?.focus(); }}><div><card.icon size={20} strokeWidth={1.45}/><ArrowUpRight size={16}/></div><strong>{card.label}</strong><small>{card.caption}</small></button>)}</div></div>
+        {historyLoading !== null && historyLoading === activeId ? <p className="history-loading" role="status">Loading conversation…</p> : activeId && activeEntry?.loaded === false ? <div className="history-loading"><p>Load this conversation to read or continue it.</p><button className="secondary-button" onClick={() => switchConversation(activeId)}>Try loading again</button></div> : !messages.length ? <div className="welcome"><div className="welcome-mark" aria-hidden="true"><span>✳</span><i/></div><div className="eyebrow">A FRESH CONVERSATION</div><h1>A little curiosity.<br/><em>A lot of possibility.</em></h1><p>Your space to think, write, and work things out.</p><div className="starter-grid">{starters.map(card => <button className="starter-card" key={card.label} onClick={() => { setDraft(card.text); textarea.current?.focus(); }}><div><card.icon size={20} strokeWidth={1.45}/><ArrowUpRight size={16}/></div><strong>{card.label}</strong><small>{card.caption}</small></button>)}</div></div>
         : <div className="message-list">
           {messages.map((message, index) => <article className={`message ${message.role}`} key={message.id}>
             <div className="message-avatar">{message.role === "assistant" ? logo : "Z"}</div>
@@ -433,7 +484,7 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
                 <ImagePlus size={17} aria-hidden="true"/>
               </button>
               {busy ? <button type="button" className="send-button stop-button" aria-label="Stop generation" onClick={() => { if (activeId) controllers.current.get(activeId)?.abort(); textarea.current?.focus(); }}><Square size={15} fill="currentColor"/></button>
-                : <button className="send-button" aria-label="Send message" disabled={!draft.trim() || readingImage || (docsMode && !docsAvailable) || (!!attachment && !!attachmentUnavailable) || (!!retryImageId && !attachment)}><ArrowUp size={20}/></button>}
+                : <button className="send-button" aria-label="Send message" disabled={!draft.trim() || readingImage || activeEntry?.loaded === false || (docsMode && !docsAvailable) || (!!attachment && !!attachmentUnavailable) || (!!retryImageId && !attachment)}><ArrowUp size={20}/></button>}
             </div>
           </div>
           <div className="composer-attachment-note" id="image-input-help" aria-live="polite">
@@ -446,12 +497,13 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
       </div></div>
     </div>
     {toast && <div className="toast" role="status">{toast}<button onClick={() => setToast("")} aria-label="Dismiss notification"><X size={14}/></button></div>}
-    {(settings || deleting) && <div className="modal-backdrop" onClick={() => { setSettings(false); setDeleting(null); }}><div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" ref={dialog} onKeyDown={trapFocus} onClick={e => e.stopPropagation()}><button className="icon-button close-dialog" onClick={() => { setSettings(false); setDeleting(null); }} aria-label="Close dialog"><X size={20}/></button>{deleting ? <><div className="eyebrow">MAKE A LITTLE ROOM</div><h2 id="dialog-title">Delete this conversation?</h2><p>This removes the conversation from this browser. It can’t be undone.</p><div className="dialog-buttons"><button className="secondary-button" onClick={() => setDeleting(null)}>Keep conversation</button><button className="danger-button" onClick={deleteConversation}>Delete conversation</button></div></> : <><div className="eyebrow">MAKE YOURSELF AT HOME</div><h2 id="dialog-title">Your workspace</h2><ModelSettingsPanel connections={connections} preferences={preferences} busy={streamingChats.size > 0}
+    {(settings || deleting) && <div className="modal-backdrop" onClick={() => { setSettings(false); setDeleting(null); }}><div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" ref={dialog} onKeyDown={trapFocus} onClick={e => e.stopPropagation()}><button className="icon-button close-dialog" onClick={() => { setSettings(false); setDeleting(null); }} aria-label="Close dialog"><X size={20}/></button>{deleting ? <><div className="eyebrow">MAKE A LITTLE ROOM</div><h2 id="dialog-title">Delete this conversation?</h2><p>{deleting && !legacyIds.current.has(deleting) && ((cloud?.entries.get(deleting)?.revision ?? 0) > 0 || cloud?.entries.get(deleting)?.mayExistRemotely || !localStates.includes(cloud?.entries.get(deleting)?.state ?? "saved")) ? "This removes the conversation from cloud history on all your devices. It can’t be undone." : "This removes the conversation from this browser. It can’t be undone."}</p><div className="dialog-buttons"><button className="secondary-button" onClick={() => setDeleting(null)}>Keep conversation</button><button className="danger-button" onClick={deleteConversation}>Delete conversation</button></div></> : <><div className="eyebrow">MAKE YOURSELF AT HOME</div><h2 id="dialog-title">Your workspace</h2><ModelSettingsPanel connections={connections} preferences={preferences} busy={streamingChats.size > 0}
       temperature={temperature} onTemperatureChange={setTemperature}
       diagnosticsEnabled={diagnosticsEnabled} onDiagnosticsChange={(model, enabled) => setDiagnosticsEnabled(previous => ({ ...previous, [model]: enabled }))}
       onRefresh={() => { void statusRequests.current?.refresh(); }}
       onApply={(model, next) => { setPreferences(previous => ({ ...previous, [model]: next })); setToast(`${modelInfo(model).label} settings saved.`); }}/>
-      {diagnosticRecords.length > 0 && <div className="diagnostic-session"><p className="settings-help">{diagnosticRecords.length} diagnostic records in this session (latest 100). Reloading or signing out clears them.</p><button type="button" className="secondary-button" onClick={() => exportDiagnostics(diagnosticRecords)}>Export session CSV</button></div>}<p className="settings-footnote">Chats stay in this browser. In live mode, messages you send are processed by your model. Older messages may be omitted to fit its context.</p><button className="signout-button" onClick={logout}><LogOut size={16}/> Sign out</button></>}</div></div>}
+      {diagnosticRecords.length > 0 && <div className="diagnostic-session"><p className="settings-help">{diagnosticRecords.length} diagnostic records in this session (latest 100). Reloading or signing out clears them.</p><button type="button" className="secondary-button" onClick={() => exportDiagnostics(diagnosticRecords)}>Export session CSV</button></div>}
+      <section className="history-settings" aria-label="Chat history"><h3>Chat history</h3><p className="settings-help">New chats sync across devices. Cloud history keeps up to 50 chats or 2,000,000 UTF-8 bytes of text and chat details. Chats with the oldest last message are removed when full, except the chat being saved. Older browser conversations stay local, including future replies.</p><p className="settings-help">Text and chat details only. Images aren’t included. Export a copy before deleting or reaching the limit.</p><div className="history-export-actions"><button className="secondary-button" disabled={exporting || !chats.length} onClick={() => { void downloadHistory("json", true); }}>Export JSON</button><button className="secondary-button" disabled={exporting || !chats.length} onClick={() => { void downloadHistory("md", true); }}>Export Markdown</button></div>{active && <div className="history-export-actions"><button className="secondary-button" disabled={exporting} onClick={() => { void downloadHistory("json"); }}>Export this chat as JSON</button><button className="secondary-button" disabled={exporting} onClick={() => { void downloadHistory("md"); }}>Export this chat as Markdown</button></div>}{hasPending && <p className="settings-help">A change is waiting to sync. <button className="secondary-button" onClick={() => { void cloud?.retry(); }}>Retry sync</button></p>}</section><p className="settings-footnote">In live mode, messages you send are processed by your model. Older messages may be omitted to fit its context.</p><button className="signout-button" onClick={logout}><LogOut size={16}/> Sign out</button></>}</div></div>}
   </div>;
 }
 
