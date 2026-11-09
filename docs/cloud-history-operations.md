@@ -254,6 +254,40 @@ inside the production function with a controlled local value. No hosted service
 is contacted. PGlite serializes its single connection: parallel submissions here
 do not replace the independent PostgreSQL-session race checks below.
 
+For actual concurrent sessions, `scripts/check-history-concurrency.mjs` uses a
+disposable PostgreSQL server listening only on `127.0.0.1`. It creates and removes
+its own uniquely named database, applies the unchanged migrations with a simulated
+Supabase Auth schema, and verifies distinct backend PIDs and server lock waits
+before releasing each race. It never accepts a hosted database URL. The nine
+suites cover the 100th signup, rolled-back admission, concurrent count/UTF-8 quota
+writes, conflicting revisions and identical retries, delete/save ordering,
+eviction rollback, and independent-account access.
+
+Use a disposable local installation, such as the Windows binary archive linked
+from [PostgreSQL's official Windows download page](https://www.postgresql.org/download/windows/)
+to [EDB's binary downloads](https://www.enterprisedb.com/download-postgresql-binaries).
+The verification was run with PostgreSQL 17.11 and the external `pg` 8.16.3 driver.
+Keep the binaries, cluster and driver outside this repository, for example under
+`D:\AILearn\.tools\postgres-concurrency`. Start the cluster on port 55439 with
+`initdb -D <disposable-cluster> --username=postgres --auth=trust --encoding=UTF8 --locale=C`, then
+`pg_ctl -D <disposable-cluster> -o "-h 127.0.0.1 -p 55439" -l <local-log> -w start`.
+The local test cluster uses the `postgres` account with local trust authentication.
+
+```powershell
+npm install --prefix D:\AILearn\.tools\postgres-concurrency pg@8.16.3 --no-audit --no-fund
+$env:CHAT_TEST_POSTGRES_DISPOSABLE = 'true'
+$env:CHAT_TEST_PG = 'D:\AILearn\.tools\postgres-concurrency\node_modules\pg\lib\index.js'
+$env:CHAT_TEST_POSTGRES_EVIDENCE = 'D:\AILearn\.tools\postgres-concurrency\results.json'
+node scripts/check-history-concurrency.mjs
+# Stop the disposable server after verification:
+pg_ctl -D <disposable-cluster> -m fast -w stop
+```
+
+The optional evidence file records the server version, migration hashes, distinct
+backend PIDs, lock/blocker observations and quota outcomes. This verifies actual
+PostgreSQL concurrency locally; hosted Google/OAuth, scheduled jobs and final
+deployment checks still require the environment-specific checks below.
+
 ## Hosted verification and rollback
 
 Before enabling production traffic, use two real Google accounts and verify:
