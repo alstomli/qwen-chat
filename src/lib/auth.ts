@@ -2,7 +2,9 @@ import { createServerClient } from "@supabase/ssr";
 import { authConfig } from "./supabase/config";
 import { isVerifiedGoogleUser } from "./google-user";
 import { canUseAdvancedSettings } from "./settings-access";
-export async function requestPrincipal(request: Request) {
+export type AuthenticatedPrincipal = { userId: string; canUseAdvancedSettings: boolean };
+const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export async function requestPrincipal(request: Request): Promise<AuthenticatedPrincipal | null> {
   const config = authConfig();
   if (!config) return null;
   try {
@@ -17,8 +19,9 @@ export async function requestPrincipal(request: Request) {
     const { data, error } = await supabase.auth.getUser();
     if (error || !isVerifiedGoogleUser(data.user)) return null;
     const { data: active, error: sessionError } = await supabase.rpc("chat_session_active");
-    if (sessionError || active !== true) return null;
-    return { userId: data.user.id, canUseAdvancedSettings: canUseAdvancedSettings(data.user.id) };
+    if (sessionError || active !== true || !canonicalUuid.test(data.user.id)) return null;
+    const userId = data.user.id.toLowerCase();
+    return { userId, canUseAdvancedSettings: canUseAdvancedSettings(userId) };
   } catch { return null; }
 }
 export async function requestAuthenticated(request: Request) {

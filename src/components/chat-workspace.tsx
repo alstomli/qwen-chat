@@ -310,7 +310,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   function retry() {
     const message = messages.findLast(m => m.role === "user");
     if (!message) return;
-    if (attachment || readingImage || retryImageId) { setToast("Finish or clear the current image draft before retrying."); return; }
+    if (draft || attachment || readingImage || retryImageId) { setToast("Finish or clear your current draft before retrying."); return; }
     const image = sentImages.current.get(message.id)?.attachment;
     if (message.imageName && !image) {
       setDraft(message.content); setRetryImageId(message.id); textarea.current?.focus();

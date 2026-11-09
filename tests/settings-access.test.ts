@@ -36,7 +36,7 @@ async function gatewayFixture(run: (fixture: {
     const url = String(input); const headers = new Headers(init?.headers);
     fixture.calls.push({ url, headers, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     if (url.endsWith("/health")) return Response.json({ ready: true, model: url.startsWith("https://bf.") ? "qwen-bf16" : "qwen",
-      settingsVersion: 1, limits: fixture.limits, adapterToggleVersion: 1, adapterToggleAvailable: fixture.adapterAvailable, diagnosticsVersion: 1 });
+      settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true, limits: fixture.limits, adapterToggleVersion: 1, adapterToggleAvailable: fixture.adapterAvailable, diagnosticsVersion: 1 });
     return new Response(sse, { headers: { "X-Chat-Adapter-Enabled": fixture.adapterConfirmation } });
   };
   try { await run(fixture); }
@@ -94,6 +94,7 @@ test("normal crafted requests replace every restricted field and fit defaults to
         const sent = fixture.calls.at(-1)!.body!;
         assert.deepEqual(sent.settings, expected); assert.equal(sent.max_tokens, expected.outputTokens);
         assert.equal(sent.useAdapter, false); assert.equal(sent.temperature, 1.2);
+        assert.equal(fixture.calls.at(-1)!.headers.get("X-Chat-User-Id"), user.id);
         assert.equal(Object.hasOwn(sent, "isAdmin"), false);
       }
     }
@@ -151,6 +152,7 @@ test("both admins preserve adapter, numeric, prefix and diagnostic controls with
       assert.equal(response.status, 200); await response.text();
       const sent = fixture.calls.at(-1)!;
       assert.deepEqual(sent.body!.settings, settings); assert.equal(sent.body!.useAdapter, true);
+      assert.equal(sent.headers.get("X-Chat-User-Id"), userId);
       assert.equal(sent.body!.max_tokens, 512); assert.equal(sent.headers.get(DIAGNOSTICS_HEADER), "1");
       const status = await GET(new Request("https://chat.example/api/status", { headers: fixture.request({}, {}, userId).headers }));
       assert.equal((await status.json()).diagnosticsAvailable, true);
