@@ -1,8 +1,9 @@
-import { requestAuthenticated, sameOrigin } from "@/lib/auth";
+import { requestPrincipal, sameOrigin } from "@/lib/auth";
 import { connectionConfig, gatewayCapabilities, diagnosticsAllowed, jsonError, readJson } from "@/lib/server";
 import { DIAGNOSTICS_HEADER, parseDiagnosticHeader } from "@/lib/diagnostics";
 import { validateInput } from "@/lib/protocol";
 import { validateSettings, gatewaySettings } from "@/lib/chat-settings";
+import { inputForAccess } from "@/lib/settings-access";
 import { IMAGE_ACCEPTED_HEADER, IMAGE_ADAPTER_ERROR, IMAGE_UNSUPPORTED_ERROR, validateImageInput } from "@/lib/image-input";
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -10,19 +11,23 @@ export const dynamic = "force-dynamic";
 const streamHeaders = { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no" };
 
 export async function POST(request: Request) {
-  if (!await requestAuthenticated(request)) return jsonError("Your session expired. Sign in to continue.", 401);
+  const principal = await requestPrincipal(request);
+  if (!principal) return jsonError("Your session expired. Sign in to continue.", 401);
   if (!sameOrigin(request)) return jsonError("This request isn't allowed.", 403);
   const diagnosticRequested = request.headers.get(DIAGNOSTICS_HEADER) === "1";
-  if (diagnosticRequested && !diagnosticsAllowed()) return jsonError("Request diagnostics are disabled.", 403);
+  if (diagnosticRequested && (!principal.canUseAdvancedSettings || !diagnosticsAllowed())) return jsonError("Request diagnostics are disabled.", 403);
   let input;
   try {
-    input = validateInput(await readJson(request, value => validateSettings(
-      value && typeof value === "object" ? (value as Record<string, unknown>).settings : undefined,
-    ).requestBytes));
+    const value = await readJson(request, value => {
+      const effective = inputForAccess(value, principal.canUseAdvancedSettings);
+      return validateSettings(effective && typeof effective === "object"
+        ? (effective as Record<string, unknown>).settings : undefined).requestBytes;
+    });
+    input = validateInput(inputForAccess(value, principal.canUseAdvancedSettings));
   }
   catch (error) { return jsonError(error instanceof Error ? error.message : "Invalid message.", 400); }
   try {
-    const { model, ...gatewayInput } = input;
+    const { model } = input;
     const config = connectionConfig(model);
     if (config.mode === "unconfigured") return jsonError("The model connection hasn't been configured yet.", 503);
     if (config.mode === "preview") {
@@ -49,6 +54,8 @@ export async function POST(request: Request) {
     let settings;
     try {
       const capabilities = await gatewayCapabilities(config);
+      // Defaults must be fitted to this gateway before checking or forwarding a normal request.
+      input = validateInput(inputForAccess(input, principal.canUseAdvancedSettings, capabilities.limits));
       if (input.image) {
         if (!capabilities.imageInput) return jsonError(IMAGE_UNSUPPORTED_ERROR, 400);
         if (capabilities.adapterToggleAvailable && input.useAdapter !== false) return jsonError(IMAGE_ADAPTER_ERROR, 400);
@@ -60,6 +67,7 @@ export async function POST(request: Request) {
       settings = gatewaySettings(input.settings, capabilities.limits);
     }
     catch (error) { return jsonError(error instanceof Error ? error.message : "Gateway settings unavailable.", 400); }
+    const { model: _model, ...gatewayInput } = input;
     const body = JSON.stringify({ ...gatewayInput, settings, stream: true });
     const controller = new AbortController();
     let timedOut = false;
