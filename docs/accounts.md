@@ -1,5 +1,7 @@
 # Google account setup and rollout
 
+Use **Kiddo Chat** as the public Google Auth Platform app name. For the existing production URL and a coordinated move to a Kiddo address, follow [branding rollout](branding-rollout.md); changing source branding alone does not update Google or Supabase configuration.
+
 This release replaces the shared workspace password with Google sign-in through
 Supabase. Anyone with an eligible Google account may register by continuing with
 Google while the 100-account registration limit has capacity. Existing users can

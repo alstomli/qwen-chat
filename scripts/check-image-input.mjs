@@ -99,7 +99,7 @@ async function checkBrowser(base, authFixture) {
     await page.getByRole('button', { name: 'Attach image', exact: true }).waitFor();
     await page.locator('input[type=file]').setInputFiles({ name: 'fixture.png', mimeType: 'image/png', buffer: imageBytes });
     await page.locator('.composer-attachment').waitFor();
-    const prompt = page.getByRole('textbox', { name: 'Message Qwen' });
+    const prompt = page.getByRole('textbox', { name: 'Message Kiddo' });
     const send = page.getByRole('button', { name: 'Send message' });
     const nextChatRequest = () => page.waitForRequest(request => request.url() === base + '/api/chat' && request.method() === 'POST');
     await prompt.fill(imagePrompt);

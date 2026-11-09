@@ -91,7 +91,7 @@ async function checkBrowser(bypassCSP) {
     await preview.waitFor();
     assert.equal(await preview.evaluate(async img => { await img.decode(); return img.naturalWidth > 0; }), true);
     const prompt = `Security image test ${bypassCSP ? 'renderer alone' : 'with CSP'}`;
-    await page.getByRole('textbox', { name: 'Message Qwen' }).fill(prompt);
+    await page.getByRole('textbox', { name: 'Message Kiddo' }).fill(prompt);
     const request = page.waitForRequest(request => request.url() === base + '/api/chat' && request.method() === 'POST');
     await page.getByRole('button', { name: 'Send message' }).click();
     const posted = (await request).postDataJSON();

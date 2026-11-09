@@ -1,10 +1,12 @@
-# Qwen Chat
+# Kiddo Chat
 
 Advanced settings are available only to the two verified admin accounts configured in `src/lib/settings-access.ts`. The server checks the authenticated Supabase user ID and active session; browser preferences and request fields cannot grant access. Regular users retain Creativity, connection status, and chat history controls. Their advanced settings use defaults fitted to the selected gateway, prefix reuse is always on, request diagnostics are unavailable, and the BF16 adapter is always off, including when continuing saved conversations. BF16 requires a gateway that supports adapter switching and confirms base-model mode on its response; unsupported gateways fail closed.
 
 For admins, Advanced settings includes **Reuse cached prefixes**, on by default and saved in this browser. Turning it off makes the gateway isolate each request's prefix cache using a fresh server-generated salt. It does not free reserved GPU memory or disable cache writes. The toggle requires the companion inference-server gateway update; quota-compatible gateways without prefix reuse controls retain the default prefix behavior with the toggle disabled. Deploy the backend update before the frontend. Deployment requires separate approval.
 
 A personal chat workspace for the existing Qwen model on Runpod. The frontend and server-side API are built with Next.js 16, React 19, and TypeScript, deployed to Vercel with local development support.
+
+Kiddo Chat is the product name; Qwen names identify the underlying models and remain in model selection, settings, diagnostics, and attribution. Browser storage keys retain their existing names to preserve saved conversations and preferences. See [branding rollout](docs/branding-rollout.md) for the coordinated public URL and Google sign-in branding cutover.
 
 The frontend can run locally at `http://127.0.0.1:3001`; the hosted production site is `https://qwen38-chat-zh.vercel.app`. Each deployment has its own server environment configuration. It supports selecting **Qwen3.8-27B-4bit** or **Qwen3.8-27B-bf16**, routed to separate authenticated Runpod gateways. The 4bit model remains the default; BF16 requires its own connection variables on the deployment being used.
 

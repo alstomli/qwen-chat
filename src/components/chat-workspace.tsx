@@ -392,7 +392,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   return <div className="workspace">
     {sidebar && <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebar(false)}/>}
     <aside className={`sidebar ${sidebar ? "is-open" : ""}`} aria-label="Conversations">
-      <div className="sidebar-brand"><button className="wordmark" onClick={newChat} aria-label="Qwen home">{logo}<span>qwen<span className="brand-dot">.</span></span></button><button className="icon-button mobile-only" onClick={() => setSidebar(false)} aria-label="Close sidebar"><PanelLeftClose size={18}/></button><span className="personal-tag">PERSONAL</span></div>
+      <div className="sidebar-brand"><button className="wordmark" onClick={newChat} aria-label="Kiddo home">{logo}<span>kiddo<span className="brand-dot">.</span></span></button><button className="icon-button mobile-only" onClick={() => setSidebar(false)} aria-label="Close sidebar"><PanelLeftClose size={18}/></button><span className="personal-tag">PERSONAL</span></div>
       <button className="new-chat" onClick={newChat}><Plus size={17}/> New conversation <span>↗</span></button>
       <div className="search-chats"><Search size={15}/><input ref={searchInput} aria-label="Search conversations" placeholder="Search conversations" value={search} onChange={e => setSearch(e.target.value)}/><kbd>⌘ K</kbd></div>
       <div className="history-heading">HISTORY<span>{chats.length}</span></div>
@@ -436,7 +436,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
             <span title={attachment.name}>{attachment.name}</span>
             <button type="button" aria-label="Remove image" onClick={() => { removeAttachment(); textarea.current?.focus(); }}><X size={16} aria-hidden="true"/></button>
           </div>}
-          <label className="sr-only" htmlFor="message">Message Qwen</label>
+          <label className="sr-only" htmlFor="message">Message Kiddo</label>
           <textarea ref={textarea} id="message" placeholder="What’s on your mind?" value={draft} onChange={e => setDraft(e.target.value)}
             maxLength={effectiveSettings.inputCharacters} rows={1} onKeyDown={e => {
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
