@@ -1,9 +1,10 @@
 import { createServerClient } from "@supabase/ssr";
 import { authConfig } from "./supabase/config";
 import { isVerifiedGoogleUser } from "./google-user";
-export async function requestAuthenticated(request: Request) {
+import { canUseAdvancedSettings } from "./settings-access";
+export async function requestPrincipal(request: Request) {
   const config = authConfig();
-  if (!config) return false;
+  if (!config) return null;
   try {
     const supabase = createServerClient(config.url, config.key, { cookies: {
       getAll: () => (request.headers.get("cookie") ?? "").split(";").map(cookie => {
@@ -14,10 +15,14 @@ export async function requestAuthenticated(request: Request) {
       setAll: () => {},
     } });
     const { data, error } = await supabase.auth.getUser();
-    if (error || !isVerifiedGoogleUser(data.user)) return false;
+    if (error || !isVerifiedGoogleUser(data.user)) return null;
     const { data: active, error: sessionError } = await supabase.rpc("chat_session_active");
-    return !sessionError && active === true;
-  } catch { return false; }
+    if (sessionError || active !== true) return null;
+    return { userId: data.user.id, canUseAdvancedSettings: canUseAdvancedSettings(data.user.id) };
+  } catch { return null; }
+}
+export async function requestAuthenticated(request: Request) {
+  return (await requestPrincipal(request)) !== null;
 }
 export function sameOrigin(request: Request) {
   const origin = request.headers.get("origin");

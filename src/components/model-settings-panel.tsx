@@ -11,7 +11,8 @@ function statusLabel(connection: Connection) {
   return connection.ready ? "Ready" : "Unavailable or loading";
 }
 
-export function ModelSettingsPanel({ connections, preferences, busy, selectedModel, selectedAdapter, adapterBusy, onAdapterChange, temperature, onTemperatureChange, diagnosticsEnabled, onDiagnosticsChange, onApply, onRefresh }: {
+export function ModelSettingsPanel({ canUseAdvancedSettings, connections, preferences, busy, selectedModel, selectedAdapter, adapterBusy, onAdapterChange, temperature, onTemperatureChange, diagnosticsEnabled, onDiagnosticsChange, onApply, onRefresh }: {
+  canUseAdvancedSettings: boolean;
   connections: ModelConnections; preferences: ModelSettings; busy: boolean;
   selectedModel: ModelId; selectedAdapter: boolean; adapterBusy: boolean; onAdapterChange: (enabled: boolean) => void;
   temperature: number; onTemperatureChange: (value: number) => void;
@@ -33,7 +34,7 @@ export function ModelSettingsPanel({ connections, preferences, busy, selectedMod
       })}</div>
     </section>
     <label className="setting-label" htmlFor="temperature">Creativity <span>{temperature.toFixed(1)}</span><input id="temperature" type="range" min="0" max="1.5" step="0.1" value={temperature} onChange={event => onTemperatureChange(Number(event.target.value))}/></label>
-    <div className="model-settings-list">{MODELS.map(model => {
+    {canUseAdvancedSettings && <div className="model-settings-list">{MODELS.map(model => {
       const connection = connections[model.id];
       const currentLimits = connection.ready ? connection.limits : undefined;
       const verifiedLimits = currentLimits ?? connection.lastVerifiedLimits;
@@ -56,6 +57,6 @@ export function ModelSettingsPanel({ connections, preferences, busy, selectedMod
           } : undefined}
           busy={busy} onApply={value => onApply(model.id, value)}/>
       </details>;
-    })}</div>
+    })}</div>}
   </>;
 }
