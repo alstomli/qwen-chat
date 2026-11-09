@@ -1,7 +1,7 @@
 import Link from "next/link";
-export const metadata = { title: "Privacy policy · qwen" };
+export const metadata = { title: "Privacy policy · Kiddo Chat" };
 export default function Privacy() {
-  return <div className="login-page"><Link href="/sign-in" className="login-brand">✳ qwen.</Link>
+  return <div className="login-page"><Link href="/sign-in" className="login-brand">✳ kiddo.</Link>
     <main className="privacy-main"><div className="eyebrow">PRIVACY & DATA</div><h1>How this workspace uses data.</h1>
       <section><h2>Your Google account</h2><p>Google handles sign-in. Supabase receives your Google identity and basic profile information, including your email address and name, and manages your app account and session. The app requests only identity, email, and basic profile access. Your Google password is entered on Google’s sign-in page.</p></section>
       <section><h2>New conversations in the cloud</h2><p>New conversations are saved to your account in Supabase so you can open them on another device. Saved history includes your messages, replies, model choices, message status, citation links, and attachment filenames. Image files and request diagnostics are not saved in cloud history. Access is restricted to your account through the app; this is not end-to-end encrypted storage.</p></section>

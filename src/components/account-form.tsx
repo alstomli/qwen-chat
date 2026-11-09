@@ -50,7 +50,7 @@ export function AccountForm() {
       setPending(false);
     }
   }
-  return <div className="login-page google-sign-in"><Link href="/sign-in" className="login-brand">✳ qwen.</Link>
+  return <div className="login-page google-sign-in"><Link href="/sign-in" className="login-brand">✳ kiddo.</Link>
     <main className="login-main"><div className="eyebrow">YOUR PERSONAL WORKSPACE</div><h1>A space of your own.</h1>
       <p>Sign in with Google to start a conversation.<br />{registrationFull
         ? "Registration is full. Existing users can still sign in."

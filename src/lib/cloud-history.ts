@@ -34,7 +34,7 @@ export function exportHistory(chats: Conversation[], format: "json" | "md") {
   const safe = chats.map(chat => ({ id: chat.id, updatedAt: chat.updatedAt, ...cloudPayload(chat) }));
   const blob = new Blob([format === "json" ? JSON.stringify(safe, null, 2) : historyMarkdown(safe)], { type: format === "json" ? "application/json" : "text/markdown;charset=utf-8" });
   const url = URL.createObjectURL(blob); const link = document.createElement("a");
-  link.href = url; link.download = `qwen-history-${new Date().toISOString().slice(0, 10)}.${format}`; link.click();
+  link.href = url; link.download = `kiddo-history-${new Date().toISOString().slice(0, 10)}.${format}`; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
