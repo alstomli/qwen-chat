@@ -476,8 +476,9 @@ export default function ChatWorkspace({ userId, email }: { userId: string; email
   </div>;
 }
 
-function MessageMarkdown({ message }: { message: Message }) {
-  return <ReactMarkdown remarkPlugins={[remarkGfm]}
+export function MessageMarkdown({ message }: { message: Message }) {
+  // Drop images before React creates an img or its automatic image preload.
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} disallowedElements={["img"]}
     components={{
       pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
       a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>,

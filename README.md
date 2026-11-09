@@ -171,6 +171,8 @@ Select **Qwen3.8-27B-bf16** and use **Attach image** to add one JPEG, PNG, or We
 
 The attachment control is available when the connected BF16 gateway advertises image input. The uploaded image shares the request byte budget with the text. The app keeps recent image bytes in the open tab for retry, and the saved conversation retains an attachment marker. Reattach the file to retry after a reload or to ask another question about the same image.
 
+Assistant Markdown images are omitted, including images inside links and reference images. They create no image elements or React image preloads while streaming or when reopening history. Text, links, code, and user attachment previews remain available. An image-only Content Security Policy also limits image sources to this app, `data:`, and `blob:` URLs.
+
 ## Live model connection
 
 The configured flow is:
@@ -232,6 +234,16 @@ node scripts/integration.mjs
 The integration check requires Docker and the sibling inference project. It creates a disposable local gateway container and a separate Next.js process on port 3002, tests real HTTP streaming and cancellation, then removes both. The model in that check is a controlled fixture, not the live GPU model.
 
 For the image attachment check, set `CHAT_TEST_IMAGE_INPUT=true` and `CHAT_TEST_FIXTURE_PYTHON` to a local Python interpreter with FastAPI, HTTPX, Uvicorn, and Pillow installed. `CHAT_TEST_FIXTURE_ROOT` can point to an inference worktree with image input support. Set `CHAT_TEST_PLAYWRIGHT` to the path of an installed Playwright `index.mjs` to also exercise the browser composer.
+
+The focused assistant-image security browser check needs Node.js 22+, existing app dependencies, and an installed Playwright package/browser. In PowerShell:
+
+```powershell
+$env:CHAT_TEST_PLAYWRIGHT = 'C:\path\to\playwright\index.mjs'
+$env:CHAT_TEST_BROWSER_CHANNEL = 'msedge' # Optional: use an installed Edge instead of Playwright Chromium.
+node scripts/check-assistant-images.mjs
+```
+
+This check uses only local fake auth and model services on ports 18005 and 18003, plus a test app on port 3002. Leave those ports free. It checks staged SSE responses through the real API proxy and reloaded cloud history, rejects image elements/preloads/network probes even with CSP bypassed, and verifies the CSP separately with a blocked fake external image. It also checks working attachment previews, ordinary Markdown, and copy actions. External image probes are intercepted; no real model, database, credentials, or deployment is needed. The default `npm test` suite also covers rendered markup for every prefix of image Markdown, including same-origin URLs.
 
 From `../llm-inference-server`, build the local image and run the Python checks without a GPU:
 
