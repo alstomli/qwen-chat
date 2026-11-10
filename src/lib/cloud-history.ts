@@ -1,4 +1,5 @@
 import { parseSourceMetadata } from "./history-metadata";
+import { parseWebMetadata } from "./web-search";
 import { isModelId } from "./models";
 import type { Conversation, Message } from "./storage";
 
@@ -18,17 +19,18 @@ export function cloudPayload(chat: Conversation): Pick<Conversation, "title" | "
     useAdapter: typeof chat.useAdapter === "boolean" ? chat.useAdapter : undefined,
     messages: chat.messages.filter(m => m.role === "user" || m.state).map(m => ({
       id: m.id, role: m.role, content: m.content,
-      ...(m.role === "user" ? { imageName: m.imageName?.slice(0, 160), docsMode: m.docsMode === true ? true : undefined } : {
+      ...(m.role === "user" ? { imageName: m.imageName?.slice(0, 160), docsMode: m.docsMode === true ? true : undefined, searchRequested: m.searchRequested === true ? true : undefined } : {
         state: m.state, model: isModelId(m.model) ? m.model : undefined,
         useAdapter: typeof m.useAdapter === "boolean" ? m.useAdapter : undefined,
         note: m.state === "error" ? "The reply failed. Please retry." : m.state === "stopped" ? "You stopped this reply." : undefined,
         docsSources: parseSourceMetadata(m.docsSources),
+        webSearch: parseWebMetadata(m.webSearch),
       }),
     })),
   };
 }
 export function historyMarkdown(chats: Conversation[]) {
-  return chats.map(chat => `# ${chat.title}\n\n${chat.messages.map(m => `## ${m.role === "user" ? "You" : "Assistant"}${m.model ? ` (${m.model}${m.useAdapter === true ? " + adapter" : ""})` : ""}\n\n${m.content}${m.imageName ? `\n\n[Image filename: ${m.imageName}; image not included]` : ""}${m.state ? `\n\n_State: ${m.state}_` : ""}${m.note ? `\n\n${m.note}` : ""}${m.docsSources?.map(s => `\n\n[${s.id}] ${s.heading}: ${s.url}`).join("") ?? ""}`).join("\n\n")}`).join("\n\n---\n\n");
+  return chats.map(chat => `# ${chat.title}\n\n${chat.messages.map(m => `## ${m.role === "user" ? "You" : "Assistant"}${m.model ? ` (${m.model}${m.useAdapter === true ? " + adapter" : ""})` : ""}\n\n${m.content}${m.imageName ? `\n\n[Image filename: ${m.imageName}; image not included]` : ""}${m.state ? `\n\n_State: ${m.state}_` : ""}${m.note ? `\n\n${m.note}` : ""}${m.docsSources?.map(s => `\n\n[${s.id}] ${s.heading}: ${s.url}`).join("") ?? ""}${m.webSearch ? `\n\n_Web search: ${m.webSearch.outcome}_` + m.webSearch.sources.map(s => `\n\n[${s.sourceId}] ${s.title}: ${s.url} (retrieved ${s.retrievedAt}; ${s.evidenceKind})`).join("") : ""}`).join("\n\n")}`).join("\n\n---\n\n");
 }
 export function exportHistory(chats: Conversation[], format: "json" | "md") {
   const safe = chats.map(chat => ({ id: chat.id, updatedAt: chat.updatedAt, ...cloudPayload(chat) }));

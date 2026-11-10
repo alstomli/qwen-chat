@@ -203,3 +203,18 @@
   .sidebar > * { flex-shrink: 0; }
   .sidebar .history-list { flex: 1 0 180px; }
 }
+/* Web lookup stays explicit and its progress remains separate from generated text. */
+.web-search-toggle{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border,#dcded8);border-radius:8px;background:transparent;color:inherit;padding:7px 9px;font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}
+.web-search-toggle[aria-pressed="true"]{background:#e6eee0;border-color:#728864;color:#30442a}
+.web-search-toggle:disabled{opacity:.5;cursor:not-allowed}
+.web-search-toggle:focus-visible,.web-sources a:focus-visible,.web-sources summary:focus-visible{outline:2px solid #637a52;outline-offset:3px}
+.web-search-help{font-size:11px;line-height:1.5;color:#6c746a;margin:0 4px 8px}
+.web-search-label,.web-search-progress,.web-sources-outcome{font-size:12px;color:#617353;margin:5px 0 10px}
+.web-sources{margin-top:14px;border-top:1px solid #e1e5dc;padding-top:10px;font-size:13px}
+.web-sources summary{cursor:pointer;width:fit-content;font-weight:600}
+.web-sources ul{list-style:none;padding:0;margin:10px 0;display:grid;gap:10px}
+.web-sources li{min-width:0;overflow-wrap:anywhere}
+.web-sources a,.web-citation{color:#466c38;text-decoration:underline;text-underline-offset:3px}
+.web-sources small{display:block;color:#747b70;font-size:11px;margin-top:3px}
+.web-source-id{font-weight:600}
+@media(max-width:480px){.composer-model{max-width:36%;font-size:10px}.web-search-toggle{padding:7px 6px;font-size:11px}.composer-controls{gap:7px}.web-search-help{font-size:10px}}

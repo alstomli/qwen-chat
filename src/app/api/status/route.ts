@@ -17,6 +17,8 @@ export async function GET(request: Request) {
     const diagnosticsAvailable = principal.canUseAdvancedSettings && diagnosticsAllowed() && capabilities.diagnosticsVersion === 1;
     return Response.json({ model, mode: "live", ready: true, limits: capabilities.limits, diagnosticsAvailable,
       adapterToggleAvailable: capabilities.adapterToggleAvailable,
+      webSearchVersion: 1, webSearchAvailable: capabilities.webSearchAvailable,
+      ...(capabilities.webSearchProfiles ? { webSearchProfiles: capabilities.webSearchProfiles } : {}),
       ...(capabilities.imageInput ? { imageInputVersion: 1, imageInput: capabilities.imageInput } : {}),
       diagnosticsVersion: diagnosticsAvailable ? 1 : 0 }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) { return Response.json({ model, mode: "live", ready: false, error: error instanceof Error ? error.message : "Model unavailable." }, { status: error instanceof GatewayCompatibilityError ? 503 : 200, headers: { "Cache-Control": "no-store" } }); }

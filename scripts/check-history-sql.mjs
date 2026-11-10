@@ -254,4 +254,29 @@ await check('database guard warns350MB, blocks400MB, resumes onlybelow350MB; pau
   } finally { await f.db.close(); }
 });
 
+await check('web citation metadata is bounded, whitelisted and private; legacy source metadata survives', async () => {
+  const f = await fixture();
+  try {
+    const user = await f.addUser(); await f.as(user);
+    const { save, get } = await helpers(f);
+    const source = { runId: 'run1', sourceId: 'S1', title: 'A source', url: 'https://example.com/docs', retrievedAt: '2026-11-10T13:00:00Z', evidenceKind: 'page' };
+    const metadata = { version: 1, runId: 'run1', outcome: 'completed', sources: [source] };
+    const payload = chat(); payload.messages[0].searchRequested = true;
+    payload.messages[1].webSearch = { ...metadata, providerKey: 'key-sentinel', sources: [{ ...source, body: 'raw-page-sentinel' }] };
+    payload.messages[1].docsSources = [{ id: 1, heading: 'Idle timeout', url: 'https://docs.runpod.io/serverless/endpoints/endpoint-configurations#idle-timeout' }];
+    const id = randomUUID(); assert.equal((await save(id, payload)).status, 'saved');
+    const stored = (await get(id)).payload;
+    assert.equal(stored.messages[0].searchRequested, true);
+    assert.deepEqual(stored.messages[1].webSearch, metadata);
+    assert.deepEqual(stored.messages[1].docsSources, payload.messages[1].docsSources);
+    assert.doesNotMatch(JSON.stringify(stored), /raw-page-sentinel|key-sentinel/);
+    await assert.rejects(rpc(f.db, 'clean_web_search_metadata($1)', [metadata]), /permission denied/);
+    for (const bad of [{ url: 'javascript:alert(1)' }, { url: 'https://user:pass@example.com/' }, { runId: 'stale' }, { sourceId: 'S0' }, { retrievedAt: '2026-99-99T13:00:00Z' }]) {
+      const invalid = chat(); invalid.messages[1].webSearch = { ...metadata, sources: [{ ...source, ...bad }] };
+      const invalidId = randomUUID(); assert.equal((await save(invalidId, invalid)).status, 'saved');
+      assert.equal((await get(invalidId)).payload.messages[1].webSearch, undefined);
+    }
+  } finally { await f.db.close(); }
+});
+
 console.log('Independent QA executed production migrations in PGlite PostgreSQL, with a simulated Supabase auth schema; no hosted changes. Parallel submissions share one serialized PGlite connection, so independent-session locking remains unverified.');
