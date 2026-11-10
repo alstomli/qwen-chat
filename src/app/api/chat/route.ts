@@ -5,12 +5,14 @@ import { validateInput } from "@/lib/protocol";
 import { validateSettings, gatewaySettings } from "@/lib/chat-settings";
 import { inputForAccess } from "@/lib/settings-access";
 import { IMAGE_ACCEPTED_HEADER, IMAGE_ADAPTER_ERROR, IMAGE_UNSUPPORTED_ERROR, validateImageInput } from "@/lib/image-input";
+import { WEB_SEARCH_HEADER, WEB_SEARCH_TIMEOUT_MS, WEB_SEARCH_UNAVAILABLE, validatedWebStream, webSearchForProfile } from "@/lib/web-search";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 const streamHeaders = { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no" };
 
 export async function POST(request: Request) {
+  const startedAt = Date.now();
   const principal = await requestPrincipal(request);
   if (!principal) return jsonError("Your session expired. Sign in to continue.", 401);
   if (!sameOrigin(request)) return jsonError("This request isn't allowed.", 403);
@@ -26,11 +28,13 @@ export async function POST(request: Request) {
     input = validateInput(inputForAccess(value, principal.canUseAdvancedSettings));
   }
   catch (error) { return jsonError(error instanceof Error ? error.message : "Invalid message.", 400); }
+  if (request.signal.aborted) return jsonError("You stopped this request.", 499);
   try {
     const { model } = input;
     const config = connectionConfig(model);
     if (config.mode === "unconfigured") return jsonError("The model connection hasn't been configured yet.", 503);
     if (config.mode === "preview") {
+      if (input.webSearch) return jsonError(WEB_SEARCH_UNAVAILABLE, 503);
       if (input.image) return jsonError(IMAGE_UNSUPPORTED_ERROR, 400);
       if (diagnosticRequested) return jsonError("Diagnostics require a live model connection.", 400);
       const encoder = new TextEncoder(); let timer: ReturnType<typeof setTimeout>; let index = 0;
@@ -54,8 +58,10 @@ export async function POST(request: Request) {
     let settings;
     try {
       const capabilities = await gatewayCapabilities(config);
+      if (request.signal.aborted) return jsonError("You stopped this request.", 499);
       // Defaults must be fitted to this gateway before checking or forwarding a normal request.
       input = validateInput(inputForAccess(input, principal.canUseAdvancedSettings, capabilities.limits));
+      if (input.webSearch && !webSearchForProfile(capabilities, model, input.useAdapter)) return jsonError(WEB_SEARCH_UNAVAILABLE, 503);
       if (input.image) {
         if (!capabilities.imageInput) return jsonError(IMAGE_UNSUPPORTED_ERROR, 400);
         if (capabilities.adapterToggleAvailable && input.useAdapter !== false) return jsonError(IMAGE_ADAPTER_ERROR, 400);
@@ -73,7 +79,14 @@ export async function POST(request: Request) {
     let timedOut = false;
     const cancel = () => controller.abort();
     request.signal.addEventListener("abort", cancel, { once: true });
-    const timer = setTimeout(() => { timedOut = true; cancel(); }, input.settings.timeoutSeconds * 1000);
+    if (request.signal.aborted) cancel();
+    const timeoutMs = input.webSearch ? Math.max(1, Math.min(WEB_SEARCH_TIMEOUT_MS, input.settings.timeoutSeconds * 1000) - (Date.now() - startedAt))
+      : input.settings.timeoutSeconds * 1000;
+    const timer = setTimeout(() => { timedOut = true; cancel(); }, timeoutMs);
+    if (controller.signal.aborted) {
+      clearTimeout(timer); request.signal.removeEventListener("abort", cancel);
+      return jsonError("You stopped this request.", 499);
+    }
     let upstream: Response;
     try {
       upstream = await fetch(config.base + "/v1/chat/completions", {
@@ -87,10 +100,12 @@ export async function POST(request: Request) {
     }
     const imageVerified = !input.image || upstream.headers.get(IMAGE_ACCEPTED_HEADER) === "true";
     const adapterVerified = input.useAdapter === undefined || upstream.headers.get("X-Chat-Adapter-Enabled") === String(input.useAdapter);
-    if (upstream.ok && (!imageVerified || !adapterVerified)) {
+    const searchVerified = !input.webSearch || upstream.headers.get(WEB_SEARCH_HEADER) === "1";
+    if (upstream.ok && (!imageVerified || !adapterVerified || !searchVerified)) {
       clearTimeout(timer); request.signal.removeEventListener("abort", cancel);
       await upstream.body?.cancel(); controller.abort();
-      return jsonError(!imageVerified ? "The model did not confirm receipt of the attached image."
+      return jsonError(!searchVerified ? "The model did not confirm web search. No web-backed answer was produced."
+        : !imageVerified ? "The model did not confirm receipt of the attached image."
         : "The selected adapter mode could not be verified.", 503);
     }
     const diagnostic = diagnosticRequested ? parseDiagnosticHeader(upstream.headers.get(DIAGNOSTICS_HEADER)) : null;
@@ -100,7 +115,7 @@ export async function POST(request: Request) {
       let message = "Your model is unavailable or still loading. Try again shortly.";
       if (upstream.status === 429) message = "Your model is answering another request. Try again in a moment.";
       const upstreamRejection = upstream.headers.get("X-Chat-Rejection");
-      const allowedRejections = ["queue_full", "rate_limit", "user_capacity", "user_rate_limit", "queue_timeout", "user_identity", "image_adapter", "image_unsupported", "image_invalid", "image_processing"];
+      const allowedRejections = ["queue_full", "rate_limit", "user_capacity", "user_rate_limit", "queue_timeout", "user_identity", "image_adapter", "image_unsupported", "image_invalid", "image_processing", "web_unavailable", "web_incompatible", "web_failed"];
       const rejection = allowedRejections.includes(upstreamRejection ?? "") ? upstreamRejection : null;
       const retryValue = upstream.headers.get("Retry-After");
       const retryAfter = upstream.status === 429 && (rejection === "user_rate_limit" || rejection === "rate_limit")
@@ -121,6 +136,8 @@ export async function POST(request: Request) {
       if (input.image && rejection === "image_processing") message = "The model could not process the attached image. Try again.";
       if (upstream.status === 400 && rejection === "user_identity")
         message = "The model account limits could not be verified. Please try again shortly.";
+      if (input.webSearch && rejection?.startsWith("web_")) message = rejection === "web_incompatible"
+        ? "Use web search and image attachments in separate messages." : "Web search could not finish. No web-backed answer was produced. Please retry.";
       await upstream.body?.cancel();
       const response = jsonError(message, upstream.status === 400 && rejection === "user_identity" ? 503 : [400, 413, 429].includes(upstream.status) || (upstream.status === 504 && rejection === "queue_timeout") ? upstream.status : 503);
       if (upstream.status === 429 && rejection !== null && ["queue_full", "rate_limit", "user_capacity", "user_rate_limit"].includes(rejection))
@@ -129,7 +146,7 @@ export async function POST(request: Request) {
       for (const [key, value] of Object.entries(diagnosticHeaders)) response.headers.set(key, value);
       return response;
     }
-    const reader = upstream.body.getReader();
+    const reader = (input.webSearch ? validatedWebStream(upstream.body) : upstream.body).getReader();
     const finish = () => { clearTimeout(timer); request.signal.removeEventListener("abort", cancel); };
     const stream = new ReadableStream<Uint8Array>({
       async pull(controller) {
@@ -143,6 +160,7 @@ export async function POST(request: Request) {
     return new Response(stream, { headers: { ...streamHeaders, ...diagnosticHeaders,
       ...(input.useAdapter === undefined ? {} : { "X-Chat-Adapter-Enabled": String(input.useAdapter) }),
       ...(input.image ? { [IMAGE_ACCEPTED_HEADER]: "true" } : {}),
+      ...(input.webSearch ? { [WEB_SEARCH_HEADER]: "1" } : {}),
       "X-Context-Trimmed": upstreamTrimmed } });
   } catch { return jsonError("Couldn't reach your model. It may be stopped or loading. Please try again.", 503); }
 }

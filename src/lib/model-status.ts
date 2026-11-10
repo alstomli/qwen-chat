@@ -1,6 +1,7 @@
 import type { ChatSettings } from "./chat-settings";
 import { MODELS, type ModelId } from "./models";
 import type { ImageInputLimits } from "./image-input";
+import type { WebSearchProfile } from "./web-search";
 
 export type Connection = {
   model: ModelId; mode: "checking" | "live" | "preview" | "unconfigured";
@@ -8,6 +9,8 @@ export type Connection = {
   lastVerifiedLimits?: ChatSettings;
   adapterToggleAvailable?: boolean;
   imageInput?: ImageInputLimits;
+  webSearchAvailable?: boolean;
+  webSearchProfiles?: WebSearchProfile[];
 };
 
 export type ModelConnections = Record<ModelId, Connection>;

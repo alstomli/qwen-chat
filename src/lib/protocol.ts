@@ -2,12 +2,14 @@ import { validateSettings, jsonBytes, type ChatSettings } from "./chat-settings"
 import { parseUsage, parseTimingEvent, type GatewayTimingEvent, type TokenUsage } from "./diagnostics";
 import { parseModelId, type ModelId } from "./models";
 import { IMAGE_ADAPTER_ERROR, IMAGE_UNSUPPORTED_ERROR, validateImageInput } from "./image-input";
+import { validateWebSearch, webEventReader, type WebEvent, type WebSearchRequest } from "./web-search";
 export type ChatMessage = { role: "user" | "assistant"; content: string };
-export type ChatInput = { model: ModelId; useAdapter?: boolean; messages: ChatMessage[]; max_tokens: number; temperature: number; settings: ChatSettings; image?: string };
+export type ChatInput = { model: ModelId; useAdapter?: boolean; messages: ChatMessage[]; max_tokens: number; temperature: number; settings: ChatSettings; image?: string; webSearch?: WebSearchRequest };
 
 export function validateInput(value: unknown): ChatInput {
   if (!value || typeof value !== "object") throw new Error("Please send a message.");
   const data = value as Record<string, unknown>;
+  const webSearch = validateWebSearch(data.webSearch);
   const model = parseModelId(data.model);
   if (data.useAdapter !== undefined && (model !== "bf16" || typeof data.useAdapter !== "boolean"))
     throw new Error("Adapter selection must be a boolean for the BF16 model.");
@@ -16,6 +18,7 @@ export function validateInput(value: unknown): ChatInput {
     throw new Error("Docs mode has been removed. Send a regular chat request without docsMode or docsPassages.");
   let image: string | undefined;
   if (data.image !== undefined) {
+    if (webSearch) throw new Error("Use web search and image attachments in separate messages.");
     if (model !== "bf16") throw new Error(IMAGE_UNSUPPORTED_ERROR);
     if (useAdapter === true) throw new Error(IMAGE_ADAPTER_ERROR);
     image = validateImageInput(data.image);
@@ -43,7 +46,7 @@ export function validateInput(value: unknown): ChatInput {
   if (messages.at(-1)!.content.length > settings.inputCharacters) throw new Error("Input character limit exceeded.");
   if (messages.length > settings.historyMessages || jsonBytes(messages) > settings.historyBytes) throw new Error("History limit exceeded.");
   const input: ChatInput = { model, ...(useAdapter === undefined ? {} : { useAdapter }), messages, max_tokens, temperature, settings,
-    ...(image === undefined ? {} : { image }) };
+    ...(image === undefined ? {} : { image }), ...(webSearch ? { webSearch } : {}) };
   if (jsonBytes({ ...input, stream: true }) > settings.requestBytes) throw new Error("Request byte limit exceeded.");
   return input;
 }
@@ -54,20 +57,29 @@ export async function consumeCompletion(
   onFinish?: (reason: string) => void,
   onUsage?: (usage: TokenUsage) => void,
   onTiming?: (event: GatewayTimingEvent) => void,
+  onWebEvent?: (event: WebEvent) => void,
 ) {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let completed = false;
+  const webEvents = webEventReader();
   function event(block: string) {
     const eventName = block.split(/\r?\n/).find(line => line.startsWith("event:"))?.slice(6).trim();
     const data = block.split(/\r?\n/).filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
     if (!data) return;
+    if (eventName?.startsWith("web-")) {
+      if (onWebEvent) onWebEvent(webEvents.read(eventName, JSON.parse(data)));
+      return;
+    }
     if (eventName === "chat-timing") {
       try { const timing = parseTimingEvent(JSON.parse(data)); if (timing) onTiming?.(timing); } catch { /* Optional metadata cannot break the answer. */ }
       return;
     }
-    if (data === "[DONE]") { completed = true; return; }
+    if (data === "[DONE]") {
+      if (onWebEvent && !webEvents.complete) throw new Error("Web search ended before its result was verified. Please retry.");
+      completed = true; return;
+    }
     const item = JSON.parse(data);
     if (item.error) throw new Error(typeof item.error === "string" ? item.error : item.error.message ?? "The response was interrupted.");
     const usage = parseUsage(item.usage);
