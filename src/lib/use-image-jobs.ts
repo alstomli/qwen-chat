@@ -33,7 +33,9 @@ export function useImageJobs(userId: string, enabled: boolean, chats: Conversati
   }, [refresh, userId]);
   const track = useCallback(async (chatId: string, messageId: string, original: GeneratedImage, explicitSubmission = false, referenceImage?: string) => {
     if (!enabled || !ownsImageRequest(userId, original.requestId) || (!original.jobId && !explicitSubmission) || running.current.has(messageId)) return;
-    if (referenceImage) references.current.set(original.requestId, referenceImage);
+    // Keep only the latest ambiguous edit: each normalized data URL can approach 3 MiB.
+    // Older unknown submissions can be restarted explicitly from their saved source.
+    if (referenceImage && original.mode === "edit") { references.current.clear(); references.current.set(original.requestId, referenceImage); }
     const controller = new AbortController(); running.current.set(messageId, controller);
     const signal = controller.signal;
     const note = (text: string) => { if (!signal.aborted) setNotes(current => ({ ...current, [messageId]: text })); };
