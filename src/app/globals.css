@@ -36,21 +36,15 @@
 .diagnostic-budget{font-family:monospace;font-size:11px;overflow-wrap:anywhere}.diagnostic-actions{display:flex;flex-wrap:wrap;gap:14px;align-items:center}.diagnostic-actions button{text-decoration:underline;font-size:11px;padding:6px 0}.diagnostic-session{margin:18px 0}
 @media(max-width:520px){.request-diagnostics dl>div{grid-template-columns:1fr;gap:3px}.request-diagnostics dd{text-align:left}}
 
-.model-picker { display: inline-flex; align-items: center; position: relative; min-width: 0; }
-.model-picker select { appearance: none; color: inherit; background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 7px 27px 7px 8px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; max-width: 100%; }
-.model-picker select:hover { border-color: #d9ded6; }
-.model-picker select:focus-visible { outline: 2px solid #476548; outline-offset: 2px; }
-.model-picker select:disabled { cursor: wait; opacity: .6; }
-.model-picker svg { position: absolute; right: 8px; pointer-events: none; }
-.model-picker option { color: #20221f; background: #fff; }
+.workspace-model { min-width: 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .composer-model { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-@media (max-width: 700px) { .workspace-heading .header-label, .workspace-heading .header-slash { display: none; } .model-picker select { font-size: 11px; padding-left: 0; } .composer-model { font-size: 10px; } }
+@media (max-width: 700px) { .workspace-heading .header-label, .workspace-heading .header-slash { display: none; } .workspace-model { font-size: 11px; } .composer-model { font-size: 10px; } }
 
 .model-connections { margin: 22px 0; }
 .model-connections-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
 .model-connections-heading h3 { font-size: 15px; margin: 0; }
 .model-connections-heading button { font-size: 11px; text-decoration: underline; padding: 5px 0; }
-.model-status-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.model-status-grid { display: grid; grid-template-columns: minmax(0,1fr); gap: 10px; }
 .model-status-card { border: 1px solid #d9dfd1; border-radius: 8px; padding: 13px; background: #f5f7f1; min-width: 0; }
 .model-status-card strong { font-size: 12px; overflow-wrap: anywhere; }
 .model-status-card p { display: flex; align-items: center; gap: 6px; font-size: 12px; margin: 10px 0 5px; }

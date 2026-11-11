@@ -8,7 +8,7 @@ import { adminIds, cookieHeader, issueSession, authResponse } from "./auth-fixtu
 import { POST } from "../src/app/api/chat/route";
 import { GET } from "../src/app/api/status/route";
 
-const summary = { version: 1, requestId: "a".repeat(32), model: "qwen", inputTokensBefore: 5000, inputTokensAfter: 150, lastCountedInputTokens: 150, outputBudget: 7680, safetyReserve: 32, contextBudget: 40960, gatewayTrimmedMessages: 2, reuseCachedPrefixes: true };
+const summary = { version: 1, requestId: "a".repeat(32), model: "qwen-bf16", inputTokensBefore: 5000, inputTokensAfter: 150, lastCountedInputTokens: 150, outputBudget: 7680, safetyReserve: 32, contextBudget: 40960, gatewayTrimmedMessages: 2, reuseCachedPrefixes: true };
 const record: DiagnosticRecord = { id: "local-id", createdAt: "2026-11-01T12:00:00Z", status: "completed", browserOriginalMessages: 7, browserSentMessages: 5, browserOriginalBytes: 2000, browserSentBytes: 1000, outputBudget: 7680, safetyReserve: 32, contextBudget: 40960, reuseCachedPrefixes: true, settings: { ...DEFAULT_SETTINGS }, temperature: 0.7, gateway: parseDiagnosticHeader(JSON.stringify(summary)), usage: { promptTokens: 150, outputTokens: 23 }, finishReason: "stop" };
 const sse = 'data: {"choices":[{"delta":{"content":"你好"},"finish_reason":null}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\ndata: {"choices":[],"usage":{"prompt_tokens":150,"completion_tokens":128,"secret":"not exported"}}\n\ndata: [DONE]\n\n';
 
@@ -74,14 +74,14 @@ test("timing events survive fragmented UTF-8, are allowlisted, and never become 
 test("API forwards diagnostics only with both opt-ins, including errors, and reports capability", async () => {
   const savedEnv = { ...process.env }; const savedFetch = globalThis.fetch;
   try {
-    Object.assign(process.env, { CHAT_PASSWORD: "test-only", SESSION_SECRET: "x".repeat(48), RUNPOD_CHAT_URL: "https://gateway.example", RUNPOD_CHAT_TOKEN: "x".repeat(48), CHAT_DIAGNOSTICS_ENABLED: "true", NODE_ENV: "production", VERCEL_ENV: "production" });
+    Object.assign(process.env, { CHAT_PASSWORD: "test-only", SESSION_SECRET: "x".repeat(48), RUNPOD_BF16_CHAT_URL: "https://gateway.example", RUNPOD_BF16_CHAT_TOKEN: "x".repeat(48), CHAT_DIAGNOSTICS_ENABLED: "true", NODE_ENV: "production", VERCEL_ENV: "production" });
     const calls: { url: string; init?: RequestInit }[] = [];
     let supported = true; let failure = false; let rejection = ""; let failureStatus = 400;
     globalThis.fetch = async (input, init) => {
       const auth = authResponse(input, init, { userId: adminIds[0] }); if (auth) return auth;
       const url = String(input); calls.push({ url, init });
-      if (url.endsWith("/health")) return Response.json({ ready: true, model: "qwen", settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true, limits: SETTINGS_MAX, diagnosticsVersion: supported ? 1 : 0 });
-      return new Response(failure ? '{"error":"private upstream detail"}' : sse, { status: failure ? failureStatus : 200, headers: { [DIAGNOSTICS_HEADER]: JSON.stringify({ ...summary, credentials: "never forward" }), "Content-Type": "text/event-stream", "X-Chat-Rejection": rejection } });
+      if (url.endsWith("/health")) return Response.json({ ready: true, model: "qwen-bf16", settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true, adapterToggleVersion: 1, adapterToggleAvailable: true, limits: SETTINGS_MAX, diagnosticsVersion: supported ? 1 : 0 });
+      return new Response(failure ? '{"error":"private upstream detail"}' : sse, { status: failure ? failureStatus : 200, headers: { "X-Chat-Adapter-Enabled": "false", [DIAGNOSTICS_HEADER]: JSON.stringify({ ...summary, credentials: "never forward" }), "Content-Type": "text/event-stream", "X-Chat-Rejection": rejection } });
     };
     const headers = { Origin: "https://chat.example", Cookie: cookieHeader(issueSession(adminIds[0])).split(";")[0], "Content-Type": "application/json" };
     const request = (diagnostic: boolean) => new Request("https://chat.example/api/chat", { method: "POST", headers: { ...headers, ...(diagnostic ? { [DIAGNOSTICS_HEADER]: "1" } : {}) }, body: JSON.stringify({ messages: [{ role: "user", content: "Hi" }], settings: DEFAULT_SETTINGS }) });

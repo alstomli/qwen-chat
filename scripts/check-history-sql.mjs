@@ -47,9 +47,9 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 
 const check = (name, test) => test().then(() => console.log(`PASS: ${name}`));
-const chat = (text = 'hello', title = 'Independent QA') => ({ title, model: '4bit', messages: [
+const chat = (text = 'hello', title = 'Independent QA') => ({ title, model: 'bf16', messages: [
   { id: randomUUID(), role: 'user', content: text },
-  { id: randomUUID(), role: 'assistant', content: 'A terminal answer', state: 'complete', model: '4bit' },
+  { id: randomUUID(), role: 'assistant', content: 'A terminal answer', state: 'complete', model: 'bf16' },
 ] });
 const rpc = async (db, sql, params = []) => (await db.query(`select public.${sql} as value`, params)).rows[0].value;
 async function helpers(f) {
@@ -133,6 +133,26 @@ await check('cloud ownership, privilege boundary, Google live sessions, immutabl
     await f.as(null,'anon');
     await assert.rejects(rpc(f.db,'chat_history_usage()'), /permission denied/);
     await assert.rejects(f.db.query('select * from public.chat_history'), /permission denied/);
+  } finally { await f.db.close(); }
+});
+
+await check('BF16 model metadata is retained and retired or malformed model identifiers cannot be persisted', async () => {
+  const f = await fixture();
+  try {
+    const user = await f.addUser(); await f.as(user); const { save, get, usage } = await helpers(f);
+    const id = randomUUID(), payload = chat();
+    assert.equal((await save(id, payload)).status, 'saved');
+    const stored = (await get(id)).payload;
+    assert.equal(stored.model, 'bf16'); assert.equal(stored.messages[1].model, 'bf16');
+    const before = await usage();
+    for (const model of ['4bit', 'unknown', null, 4, {}]) {
+      await assert.rejects(save(randomUUID(), { ...chat(), model }), /Unsupported.*model/i);
+      const invalid = chat(); invalid.messages[1].model = model;
+      await assert.rejects(save(randomUUID(), invalid), /Unsupported.*model/i);
+    }
+    assert.deepEqual(await usage(), before, 'Rejected models must not mutate cloud history or consume quota');
+    const legacy = chat(); delete legacy.model; delete legacy.messages[1].model;
+    assert.equal((await save(randomUUID(), legacy)).status, 'saved', 'Missing legacy metadata remains accepted');
   } finally { await f.db.close(); }
 });
 

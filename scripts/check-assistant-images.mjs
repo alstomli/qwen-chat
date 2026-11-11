@@ -82,9 +82,9 @@ async function checkBrowser(bypassCSP) {
     assert.equal(await page.locator('img[src="/google-g.png"]').evaluate(async img => { await img.decode(); return img.naturalWidth > 0; }), true);
     auth.setNextIdentity('test@example.com');
     await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
-    // The model select is server-rendered; wait for client effects before changing it.
+    // Wait for hydrated BF16 capabilities before attaching an image.
     await waitFor(() => statuses.some(status => status.model === 'bf16' && status.ready), 'hydrated model capabilities');
-    await page.getByRole('combobox', { name: 'Model', exact: true }).selectOption('bf16');
+    assert.equal(await page.getByRole('combobox', { name: 'Model', exact: true }).count(), 0);
     await page.locator('button[aria-label="Attach image"]:not(:disabled)').waitFor();
     await page.locator('input[type=file]').setInputFiles({ name: 'fixture.png', mimeType: 'image/png', buffer: imageBytes });
     const preview = page.getByRole('img', { name: 'Image preview', exact: true });
@@ -150,7 +150,7 @@ async function checkBrowser(bypassCSP) {
       console.log('PASS: CSP independently rejects an external image (img-src violation and CSP request failure)');
     }
   } catch (error) {
-    console.error('Browser state:', JSON.stringify({ statuses, model: await page.getByRole('combobox', { name: 'Model', exact: true }).inputValue().catch(() => null),
+    console.error('Browser state:', JSON.stringify({ statuses, model: 'bf16',
       imageHelp: await page.locator('#image-input-help').textContent().catch(() => null), errors }));
     throw error;
   } finally { await context.close(); }
@@ -177,7 +177,7 @@ try {
     cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env,
       NODE_ENV: 'development', NEXT_TELEMETRY_DISABLED: '1', CHAT_TEST_DIST_DIR: '.next-integration',
       NEXT_PUBLIC_SUPABASE_URL: auth.url, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'fixture-public-key',
-      RUNPOD_CHAT_URL: '', RUNPOD_CHAT_TOKEN: '', RUNPOD_BF16_CHAT_URL: 'http://127.0.0.1:18003',
+      RUNPOD_BF16_CHAT_URL: 'http://127.0.0.1:18003',
       RUNPOD_BF16_CHAT_TOKEN: 'local-fixture-token-' + 'x'.repeat(40), CHAT_PREVIEW_MODE: 'false' },
   });
   app.stdout.on('data', chunk => logs += chunk); app.stderr.on('data', chunk => logs += chunk);

@@ -39,7 +39,7 @@ export async function checkCloudHistory(base, fixture) {
     await page.getByRole('button', { name: /New conversation/ }).click();
     await page.getByRole('textbox', { name: 'Message Kiddo', exact: true }).fill(text);
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
-    await page.locator('.message.assistant').getByText(/sample|integration fixture/).waitFor();
+    await page.locator('.message.assistant').getByText(/sample|Fixture response using qwen-bf16/).waitFor();
     await page.getByRole('button', { name: 'Stop generation', exact: true }).waitFor({ state: 'hidden' });
   };
   try {
@@ -98,7 +98,7 @@ export async function checkCloudHistory(base, fixture) {
     await device.getByRole('button', { name: online, exact: true }).waitFor();
     await device.getByRole('button', { name: online, exact: true }).click();
     await device.locator('.message.user').getByText(online, { exact: true }).waitFor();
-    await device.locator('.message.assistant').getByText(/sample|integration fixture/).waitFor();
+    await device.locator('.message.assistant').getByText(/sample|Fixture response using qwen-bf16/).waitFor();
     assert.equal(await device.getByRole('button', { name: legacy, exact: true }).count(), 0);
     await login(stranger, `other-history-${suffix}@example.com`);
     assert.equal(await stranger.getByRole('button', { name: online, exact: true }).count(), 0);

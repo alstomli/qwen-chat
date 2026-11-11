@@ -324,3 +324,13 @@ with the operator and prepare a targeted forward fix while keeping migration 001
 intact. Any destructive schema rollback or backup restore needs a protected backup,
 explicit data-loss review, and release approval. There is no guaranteed lossless
 rollback once deletion/eviction or post-backup writes have occurred.
+
+## BF16-only model writes
+
+After the web-search metadata migration, apply `202611100002_bf16_only.sql`.
+The payload cleaner accepts the BF16 model ID and rejects explicitly unsupported
+conversation or assistant-answer IDs. Missing optional model metadata remains
+accepted. Existing rows and earlier migration files remain unchanged. The frontend
+omits explicit unsupported histories from local cache, cloud listings, and loaded
+message pages. Hidden cloud rows still count against the account storage quota;
+this update does not delete them or stop any model service.

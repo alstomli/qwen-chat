@@ -72,19 +72,19 @@ test("storage recovers from corruption and excludes unsuccessful turns from futu
   assert.deepEqual(history, [{ role: "user", content: "successful question" }, { role: "assistant", content: "answer" }]);
 });
 test("production disables sample replies and requires an HTTPS gateway", () => {
-  const saved = { node: process.env.NODE_ENV, url: process.env.RUNPOD_CHAT_URL, token: process.env.RUNPOD_CHAT_TOKEN, preview: process.env.CHAT_PREVIEW_MODE };
+  const saved = { node: process.env.NODE_ENV, url: process.env.RUNPOD_BF16_CHAT_URL, token: process.env.RUNPOD_BF16_CHAT_TOKEN, preview: process.env.CHAT_PREVIEW_MODE };
   try {
     Reflect.set(process.env, "NODE_ENV", "production");
     process.env.CHAT_PREVIEW_MODE = "true";
-    delete process.env.RUNPOD_CHAT_URL; delete process.env.RUNPOD_CHAT_TOKEN;
+    delete process.env.RUNPOD_BF16_CHAT_URL; delete process.env.RUNPOD_BF16_CHAT_TOKEN;
     assert.equal(connectionConfig().mode, "unconfigured");
-    process.env.RUNPOD_CHAT_URL = "http://127.0.0.1:18001";
-    process.env.RUNPOD_CHAT_TOKEN = "test-only-token-" + "x".repeat(40);
+    process.env.RUNPOD_BF16_CHAT_URL = "http://127.0.0.1:18001";
+    process.env.RUNPOD_BF16_CHAT_TOKEN = "test-only-token-" + "x".repeat(40);
     assert.throws(() => connectionConfig(), /HTTPS/);
-    process.env.RUNPOD_CHAT_URL = "https://gateway.example";
+    process.env.RUNPOD_BF16_CHAT_URL = "https://gateway.example";
     assert.equal(connectionConfig().mode, "live");
   } finally {
-    for (const [key, value] of Object.entries({ NODE_ENV: saved.node, RUNPOD_CHAT_URL: saved.url, RUNPOD_CHAT_TOKEN: saved.token, CHAT_PREVIEW_MODE: saved.preview })) {
+    for (const [key, value] of Object.entries({ NODE_ENV: saved.node, RUNPOD_BF16_CHAT_URL: saved.url, RUNPOD_BF16_CHAT_TOKEN: saved.token, CHAT_PREVIEW_MODE: saved.preview })) {
       if (value === undefined) delete process.env[key]; else Reflect.set(process.env, key, value);
     }
   }

@@ -11,17 +11,17 @@ function statusLabel(connection: Connection) {
   return connection.ready ? "Ready" : "Unavailable or loading";
 }
 
-export function ModelSettingsPanel({ canUseAdvancedSettings, connections, preferences, busy, selectedModel, selectedAdapter, adapterBusy, onAdapterChange, temperature, onTemperatureChange, diagnosticsEnabled, onDiagnosticsChange, onApply, onRefresh }: {
+export function ModelSettingsPanel({ canUseAdvancedSettings, connections, preferences, busy, selectedAdapter, adapterBusy, onAdapterChange, temperature, onTemperatureChange, diagnosticsEnabled, onDiagnosticsChange, onApply, onRefresh }: {
   canUseAdvancedSettings: boolean;
   connections: ModelConnections; preferences: ModelSettings; busy: boolean;
-  selectedModel: ModelId; selectedAdapter: boolean; adapterBusy: boolean; onAdapterChange: (enabled: boolean) => void;
+  selectedAdapter: boolean; adapterBusy: boolean; onAdapterChange: (enabled: boolean) => void;
   temperature: number; onTemperatureChange: (value: number) => void;
   diagnosticsEnabled: Record<ModelId, boolean>; onDiagnosticsChange: (model: ModelId, enabled: boolean) => void;
   onApply: (model: ModelId, value: ChatSettings) => void; onRefresh: () => void;
 }) {
   return <>
     <section className="model-connections" aria-labelledby="model-connections-heading">
-      <div className="model-connections-heading"><h3 id="model-connections-heading">Model connections</h3><button type="button" onClick={onRefresh}>Refresh connections</button></div>
+      <div className="model-connections-heading"><h3 id="model-connections-heading">Model connection</h3><button type="button" onClick={onRefresh}>Refresh connection</button></div>
       <div className="model-status-grid">{MODELS.map(model => {
         const connection = connections[model.id];
         return <article className="model-status-card" aria-label={`${model.label} connection`} key={model.id}>
@@ -29,7 +29,7 @@ export function ModelSettingsPanel({ canUseAdvancedSettings, connections, prefer
           <p role="status"><span className={`status-dot ${connection.ready ? "ready" : ""}`}/>{statusLabel(connection)}</p>
           {connection.ready && connection.limits && <small>{connection.mode === "preview" ? "Preview context" : "Verified context"}: {connection.limits.contextTokens.toLocaleString()} tokens</small>}
           {connection.error && <small>{connection.error}</small>}
-          {connection.mode === "unconfigured" && <small>This model needs its own server-side gateway configuration.</small>}
+          {connection.mode === "unconfigured" && <small>Configure the BF16 server-side gateway to connect this model.</small>}
         </article>;
       })}</div>
     </section>
@@ -46,15 +46,14 @@ export function ModelSettingsPanel({ canUseAdvancedSettings, connections, prefer
           available={!!verifiedLimits} usingLastVerifiedLimits={!currentLimits && !!connection.lastVerifiedLimits}
           diagnosticsAvailable={connection.diagnosticsAvailable === true} diagnosticsEnabled={diagnosticsEnabled[model.id]}
           onDiagnosticsChange={enabled => onDiagnosticsChange(model.id, enabled)} preview={connection.mode === "preview"}
-          adapter={model.id === "bf16" ? {
-            checked: selectedModel === "bf16" ? selectedAdapter : true,
-            disabled: selectedModel !== "bf16" || adapterBusy || !connection.ready || connection.adapterToggleAvailable !== true,
-            help: selectedModel !== "bf16" ? "Select the BF16 model in the chat to change its adapter."
-              : adapterBusy ? "Stop the current reply before changing its adapter."
+          adapter={{
+            checked: selectedAdapter,
+            disabled: adapterBusy || !connection.ready || connection.adapterToggleAvailable !== true,
+            help: adapterBusy ? "Stop the current reply before changing its adapter."
               : !connection.ready || connection.adapterToggleAvailable !== true ? "Connect BF16 to a gateway with adapter selection enabled to change this setting."
               : "Applies immediately to the selected conversation or new chat. Turn off to use the BF16 base model and attach images.",
             onChange: onAdapterChange,
-          } : undefined}
+          }}
           busy={busy} onApply={value => onApply(model.id, value)}/>
       </details>;
     })}</div>}

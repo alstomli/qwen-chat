@@ -1,3 +1,5 @@
+import { isModelId } from "./models";
+
 /** Public web-search protocol. Provider credentials and page bodies never enter this module. */
 export const WEB_SEARCH_HEADER = "X-Chat-Web-Search";
 export const WEB_SEARCH_TIMEOUT_MS = 240_000;
@@ -17,9 +19,9 @@ export function parseWebSearchProfiles(value: unknown): WebSearchProfile[] | und
   return result;
 }
 export function webSearchForProfile(capability: { webSearchProfiles?: WebSearchProfile[]; webSearchAvailable?: boolean }, model: string, useAdapter?: boolean) {
-  if (capability.webSearchProfiles) return capability.webSearchProfiles.find(p => p.useAdapter === (useAdapter ?? false))?.available === true;
-  // Older version-one single-profile gateways can only establish the ordinary 4-bit alias.
-  return model === "4bit" && capability.webSearchAvailable === true;
+  if (!isModelId(model)) return false;
+  // BF16 requires the gateway to advertise the requested base/adapter profile explicitly.
+  return capability.webSearchProfiles?.find(p => p.useAdapter === (useAdapter ?? false))?.available === true;
 }
 export type WebEvent = { version: 1; runId: string; sequence: number } & (
   { type: "web-status"; status: WebStatus } | { type: "web-sources"; sources: WebSource[] } |

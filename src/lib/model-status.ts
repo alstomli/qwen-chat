@@ -15,7 +15,7 @@ export type Connection = {
 
 export type ModelConnections = Record<ModelId, Connection>;
 export function initialModelConnections(): ModelConnections {
-  return { "4bit": { model: "4bit", mode: "checking", ready: false }, bf16: { model: "bf16", mode: "checking", ready: false } };
+  return { bf16: { model: "bf16", mode: "checking", ready: false } };
 }
 export function updateModelConnection(current: ModelConnections, next: Connection): ModelConnections {
   const lastVerifiedLimits = next.mode === "live" && next.ready && next.limits

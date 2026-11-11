@@ -11,7 +11,7 @@ const prompt = { role: "user", content: "Describe this image." } as const;
 test("image input is a bounded inline image on the newest BF16 base prompt", () => {
   const request = { model: "bf16", useAdapter: false, messages: [prompt], image };
   assert.equal(validateInput(request).image, image);
-  assert.throws(() => validateInput({ ...request, model: "4bit", useAdapter: undefined }), /does not accept images/);
+  assert.throws(() => validateInput({ ...request, model: "4bit", useAdapter: undefined }), /supported/);
   assert.throws(() => validateInput({ ...request, useAdapter: true }), /Turn off.*trained adapter.*Advanced settings/);
   for (const invalid of ["https://example.com/image.png", image.replace("image/png", "image/jpeg"), image + "\n", [image, image]]) {
     assert.throws(() => validateInput({ ...request, image: invalid }), /image/);

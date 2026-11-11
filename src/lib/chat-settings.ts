@@ -72,11 +72,10 @@ export function parseSettings(raw: string | null): ChatSettings {
 }
 
 export type ModelSettings = Record<ModelId, ChatSettings>;
-export function parseModelSettings(raw: string | null, legacy: string | null): ModelSettings {
+export function parseModelSettings(raw: string | null): ModelSettings {
   let value;
   try { value = JSON.parse(raw ?? "null"); } catch { value = null; }
-  return { "4bit": value?.["4bit"] ? fitSettings(value["4bit"]) : parseSettings(legacy),
-    bf16: value?.bf16 ? fitSettings(value.bf16) : { ...DEFAULT_SETTINGS } };
+  return { bf16: value?.bf16 ? fitSettings(value.bf16) : { ...DEFAULT_SETTINGS } };
 }
 
 export function parseServerLimits(value: unknown): ChatSettings {

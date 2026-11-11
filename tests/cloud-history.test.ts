@@ -157,3 +157,35 @@ test('cloud load, later save and durable restore preserve older source metadata'
   assert.deepEqual(restored.store.entries.get(c.id)?.chat.messages[1].docsSources,sources);
   restored.store.dispose();
 });
+
+test('retired model cache entries and pending writes never restore or reach the cloud', async () => {
+  let saves = 0;
+  const { store, records } = harness(async name => { if (name === 'save_chat') saves++; return { data: usage, error: null }; });
+  const retained = chat(); retained.model = 'bf16';
+  const removed = { ...chat(), model: '4bit' } as unknown as Conversation;
+  const legacyAnswer = { ...chat(), model: 'bf16', messages: [{ id: 'old', role: 'assistant', content: 'old', model: '4bit' }] } as unknown as Conversation;
+  const pending = snapshot(chat());
+  pending.operation = { id: randomUUID(), revision: 0, payload: { ...cloudPayload(pending.chat), model: '4bit' } as unknown as ReturnType<typeof cloudPayload> };
+  records.set('qa:user:alice', JSON.stringify([snapshot(retained), snapshot(removed), snapshot(legacyAnswer), pending]));
+  store.restore();
+  assert.deepEqual([...store.entries.keys()], [retained.id]);
+  store.stage(removed); store.stage(legacyAnswer); await turn();
+  assert.equal(saves, 0); assert.equal(store.entries.size, 1); store.dispose();
+});
+
+test('retired cloud summaries and unsupported assistant metadata in later pages stay out of browser history', async () => {
+  const supported = chat(); supported.model = 'bf16';
+  const retired = { ...chat(), model: '4bit', revision: 1 };
+  let pages = 0;
+  const { store } = harness(async name => {
+    if (name === 'list_chat_history') return { data: [retired, { ...supported, revision: 1 }], error: null };
+    if (name !== 'get_chat_history') return { data: usage, error: null };
+    pages++;
+    const messages = pages === 1 ? [{ id: 'u', role: 'user', content: 'question' }]
+      : [{ id: 'a', role: 'assistant', content: 'retired answer', state: 'complete', model: '4bit' }];
+    return { data: { payload: { title: supported.title, model: 'bf16', messages }, revision: 1, totalMessages: 2, updatedAt: 1 }, error: null };
+  });
+  await store.refresh(); assert.deepEqual([...store.entries.keys()], [supported.id]);
+  assert.equal(await store.load(supported.id), null); assert.equal(pages, 2);
+  assert.equal(store.entries.size, 0); store.dispose();
+});

@@ -7,14 +7,14 @@ import { SETTINGS_MAX } from "../src/lib/chat-settings";
 import { modelStatusRequests, type Connection } from "../src/lib/model-status";
 import { authResponse, cookieHeader, issueSession, user } from "./auth-fixture";
 
-const health = { ready: true, model: "qwen", settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true, limits: SETTINGS_MAX };
+const health = { ready: true, model: "qwen-bf16", settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true, adapterToggleVersion: 1, adapterToggleAvailable: true, limits: SETTINGS_MAX };
 function headers() { return { Cookie: cookieHeader(issueSession()), Origin: "https://chat.example", "Content-Type": "application/json" }; }
 function request(extraHeaders = {}, extraBody = {}) {
   return new Request("https://chat.example/api/chat", { method: "POST", headers: { ...headers(), ...extraHeaders },
     body: JSON.stringify({ messages: [{ role: "user", content: "hello" }], ...extraBody }) });
 }
 function configure() {
-  Object.assign(process.env, { NODE_ENV: "production", RUNPOD_CHAT_URL: "https://gateway.example", RUNPOD_CHAT_TOKEN: "x".repeat(48) });
+  Object.assign(process.env, { NODE_ENV: "production", RUNPOD_BF16_CHAT_URL: "https://gateway.example", RUNPOD_BF16_CHAT_TOKEN: "x".repeat(48) });
 }
 
 test("chat resolves one verified principal and overwrites inbound and body identity", async () => {
@@ -32,7 +32,7 @@ test("chat resolves one verified principal and overwrites inbound and body ident
       assert.equal(new Headers(init?.headers).get("X-Chat-User-Id"), user.id);
       const body = JSON.parse(String(init?.body));
       for (const key of ["userId", "user_id", "accountId", "principal", "X-Chat-User-Id"]) assert.equal(body[key], undefined);
-      return new Response("data: [DONE]\n\n");
+      return new Response("data: [DONE]\n\n", { headers: { "X-Chat-Adapter-Enabled": "false" } });
     };
     const response = await POST(request({ "X-Chat-User-Id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" },
       { userId: "spoofed", user_id: "spoofed", accountId: "spoofed", principal: "spoofed", "X-Chat-User-Id": "spoofed" }));
@@ -100,8 +100,8 @@ test("quota errors use safe allowlisted codes and bounded integer Retry-After", 
 
 test("status503 replaces an earlier ready model with a nonready state", async () => {
   const states: Connection[] = []; let healthy = true;
-  const loader = modelStatusRequests("4bit", state => states.push(state), () => assert.fail("unexpected signout"),
-    (async () => Response.json({ model: "4bit", mode: "live", ready: healthy }, { status: healthy ? 200 : 503 })) as typeof fetch);
+  const loader = modelStatusRequests("bf16", state => states.push(state), () => assert.fail("unexpected signout"),
+    (async () => Response.json({ model: "bf16", mode: "live", ready: healthy }, { status: healthy ? 200 : 503 })) as typeof fetch);
   await loader.refresh(); healthy = false; await loader.refresh(); loader.dispose();
   assert.deepEqual(states.map(state => state.ready), [true, false]);
 });

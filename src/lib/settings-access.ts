@@ -12,8 +12,8 @@ export function settingsForAccess(value: unknown, allowed: boolean, limits: Chat
 }
 
 /** Stored conversations describe past requests; their adapter flag cannot grant access. */
-export function adapterForAccess(model: ModelId, value: boolean | undefined, allowed: boolean) {
-  return model === "bf16" ? allowed ? value : false : undefined;
+export function adapterForAccess(_model: ModelId, value: boolean | undefined, allowed: boolean) {
+  return allowed ? value : false;
 }
 
 /** Replace restricted fields before validation, including legacy max_tokens overrides. */
@@ -22,5 +22,5 @@ export function inputForAccess(value: unknown, allowed: boolean, limits: ChatSet
   const data = value as Record<string, unknown>;
   const settings = settingsForAccess(undefined, false, limits);
   return { ...data, settings, max_tokens: settings.outputTokens,
-    useAdapter: data.model === "bf16" ? false : undefined };
+    useAdapter: false };
 }
