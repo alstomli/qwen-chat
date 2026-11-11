@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { requestImageJob } from "./image-request";
 import { imageFailureStatus, imagePending, parseGeneratedImage, type GeneratedImage } from "./generated-image";
 import { ownsImageRequest, forgetImageRequest } from "./image-origin";
 import { loadImage, removeImage, saveImage } from "./image-store";
 import type { Conversation } from "./storage";
 
 class ImageRequestError extends Error { constructor(message: string, readonly status: number) { super(message); } }
-async function read(url: string, init?: RequestInit) {
-  const response = await fetch(url, { cache: "no-store", ...init });
+async function readResponse(response: Response) {
   const data = await response.json();
   if (!response.ok) throw new ImageRequestError(data?.error?.message ?? "The image service is unavailable.", response.status);
   return data;
 }
+async function read(url: string, init?: RequestInit) { return readResponse(await fetch(url, { cache: "no-store", ...init })); }
 export function useImageJobs(userId: string, enabled: boolean, chats: Conversation[], setChats: Dispatch<SetStateAction<Conversation[]>>) {
   const [available, setAvailable] = useState(false); const [reason, setReason] = useState("Checking image service…");
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -27,8 +28,8 @@ export function useImageJobs(userId: string, enabled: boolean, chats: Conversati
     const requests = running.current;
     return () => { epoch.current++; mounted.current = false; for (const request of requests.values()) request.abort(); requests.clear(); };
   }, [refresh, userId]);
-  const track = useCallback(async (chatId: string, messageId: string, original: GeneratedImage) => {
-    if (!enabled || !ownsImageRequest(userId, original.requestId) || running.current.has(messageId)) return;
+  const track = useCallback(async (chatId: string, messageId: string, original: GeneratedImage, explicitSubmission = false) => {
+    if (!enabled || !ownsImageRequest(userId, original.requestId) || (!original.jobId && !explicitSubmission) || running.current.has(messageId)) return;
     const controller = new AbortController(); running.current.set(messageId, controller);
     const signal = controller.signal;
     const note = (text: string) => { if (!signal.aborted) setNotes(current => ({ ...current, [messageId]: text })); };
@@ -36,7 +37,9 @@ export function useImageJobs(userId: string, enabled: boolean, chats: Conversati
     let image = original;
     try {
       note("");
-      let job = await read(image.jobId ? `/api/images/${image.jobId}` : "/api/images", image.jobId ? { signal } : { method: "POST", signal, headers: { "Content-Type": "application/json", "Idempotency-Key": image.requestId }, body: JSON.stringify({ prompt: image.prompt }) });
+      const response = await requestImageJob(image, explicitSubmission, signal);
+      if (!response) return;
+      let job = await readResponse(response);
       while (!signal.aborted) {
         const parsed = parseGeneratedImage({ ...image, jobId: job.jobId, status: job.status, cancellationRequested: job.cancellationRequested === true });
         if (!parsed?.jobId) throw new Error("The image service returned an invalid job.");
@@ -70,7 +73,7 @@ export function useImageJobs(userId: string, enabled: boolean, chats: Conversati
   }, [enabled, userId, setChats]);
   useEffect(() => { if (enabled) for (const chat of chats) for (const message of chat.messages) {
     if (message.generatedImage && ownsImageRequest(userId, message.generatedImage.requestId) && !notes[message.id]) {
-      if (imagePending(message.generatedImage)) void track(chat.id, message.id, message.generatedImage);
+      if (imagePending(message.generatedImage) && message.generatedImage.jobId) void track(chat.id, message.id, message.generatedImage);
       else if (message.generatedImage.status === "completed" && !recovered.current.has(message.id)) {
         recovered.current.add(message.id); const owner = epoch.current; void loadImage(userId, message.id).then(blob => { if (!blob && mounted.current && epoch.current === owner) void track(chat.id, message.id, message.generatedImage!); }).catch(() => {});
       }

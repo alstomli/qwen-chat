@@ -9,6 +9,24 @@ import { ownsImageRequest, rememberImageRequest, forgetImageRequest } from "../s
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ImageJobCard } from "../src/components/image-job-card";
+import { requestImageJob } from "../src/lib/image-request";
+
+test("reload never re-POSTs an unconfirmed submission; new explicit actions may submit", async () => {
+  const calls: { url: string; method: string; key: string | null }[] = [];
+  const transport: typeof fetch = async (url, init) => {
+    calls.push({ url: String(url), method: init?.method ?? "GET", key: new Headers(init?.headers).get("Idempotency-Key") });
+    return Response.json({ jobId: "known", status: "generating" });
+  };
+  const unknown = { version: 1 as const, requestId: "stable", prompt: "tree", status: "submitting" as const };
+  const signal = new AbortController().signal;
+  assert.equal(await requestImageJob(unknown, false, signal, transport), null);
+  assert.deepEqual(calls, []);
+  await requestImageJob(unknown, true, signal, transport);
+  assert.deepEqual(calls, [{ url: "/api/images", method: "POST", key: "stable" }]);
+  calls.length = 0;
+  await requestImageJob({ ...unknown, jobId: "known" }, false, signal, transport);
+  assert.deepEqual(calls, [{ url: "/api/images/known", method: "GET", key: null }]);
+});
 
 test("foreign pending image cards offer explicit regeneration without live-job controls", () => {
   for (const status of ["submitting", "generating", "completed"] as const) {

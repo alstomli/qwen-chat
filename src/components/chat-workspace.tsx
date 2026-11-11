@@ -346,6 +346,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
     const generatedImage: GeneratedImage = { version: 1, prompt, requestId: messageId, status: "submitting" };
     setChats(current => [{ id, model: selectedModel, title: active?.title ?? prompt.slice(0, 48), updatedAt: Date.now(), messages: [...(current.find(chat => chat.id === id)?.messages ?? []), { id: messageId, role: "assistant", content: "", state: "complete", generatedImage }] }, ...current.filter(chat => chat.id !== id)]);
     setActiveId(id); setImageDraft(""); imageDrafts.current.delete(activeId); follow.current = true;
+    void imageJobs.track(id, messageId, generatedImage, true);
   }
   function retry() {
     const message = messages.findLast(m => m.role === "user");
@@ -450,7 +451,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
         {historyLoading !== null && historyLoading === activeId ? <p className="history-loading" role="status">Loading conversation…</p> : activeId && activeEntry?.loaded === false ? <div className="history-loading"><p>Load this conversation to read or continue it.</p><button className="secondary-button" onClick={() => switchConversation(activeId)}>Try loading again</button></div> : !messages.length ? <div className="welcome"><div className="welcome-mark" aria-hidden="true"><span>✳</span><i/></div><div className="eyebrow">A FRESH CONVERSATION</div><h1>A little curiosity.<br/><em>A lot of possibility.</em></h1><p>Your space to think, write, and work things out.</p><div className="starter-grid">{starters.map(card => <button className="starter-card" key={card.label} onClick={() => { setDraft(card.text); textarea.current?.focus(); }}><div><card.icon size={20} strokeWidth={1.45}/><ArrowUpRight size={16}/></div><strong>{card.label}</strong><small>{card.caption}</small></button>)}</div></div>
         : <div className="message-list">
           {messages.map((message, index) => message.generatedImage ? <ImageJobCard key={message.id} userId={userId} id={message.id} image={message.generatedImage} note={imageJobs.notes[message.id]} allowed={canUseAdvancedSettings}
-            onCheck={() => { if (activeId) void imageJobs.track(activeId, message.id, message.generatedImage!); }}
+            onCheck={() => { if (activeId) void imageJobs.track(activeId, message.id, message.generatedImage!, true); }}
             onCancel={() => { if (activeId) void imageJobs.cancel(activeId, message.id, message.generatedImage!); }}
             onEdit={() => { setImageMode(true); setImageDraft(message.generatedImage!.prompt); textarea.current?.focus(); }}
             onGenerate={() => generateImage(message.generatedImage!.prompt)}/> : <article className={`message ${message.role}`} key={message.id}>

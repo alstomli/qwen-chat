@@ -4,7 +4,7 @@ import { Download, ImagePlus, LoaderCircle } from "lucide-react";
 import { imagePending, type GeneratedImage } from "@/lib/generated-image";
 import { ownsImageRequest } from "@/lib/image-origin";
 import { loadImage } from "@/lib/image-store";
-const labels = { submitting: "Starting image…", queued: "Queued", generating: "Creating image…", completed: "Complete", failed: "Failed", cancelled: "Canceled", expired: "Result expired" };
+const labels = { submitting: "Awaiting confirmation", queued: "Queued", generating: "Creating image…", completed: "Complete", failed: "Failed", cancelled: "Canceled", expired: "Result expired" };
 export function ImageJobCard({ userId, id, image, note, allowed, onCheck, onCancel, onEdit, onGenerate }: {
   userId: string; id: string; image: GeneratedImage; note?: string; allowed: boolean;
   onCheck: () => void; onCancel: () => void; onEdit: () => void; onGenerate: () => void;
@@ -28,6 +28,7 @@ export function ImageJobCard({ userId, id, image, note, allowed, onCheck, onCanc
       {!localOrigin && !url && <p className="image-job-note">Only the prompt and job details are available here. Open the browser that created the image, or generate again to create one here.</p>}
       {image.status === "completed" && (localOrigin || url) && <p className="image-job-note">{url ? "Saved on this browser · 1024 × 1024 PNG" : "This image is unavailable on this browser. Prompt and job details sync across devices; image files stay in the browser that created them."}</p>}
       {image.cancellationRequested && image.status === "completed" && <p className="image-job-note">The image finished before cancellation took effect.</p>}
+      {localOrigin && !image.jobId && pending && <p className="image-job-note">If this submission was interrupted, its outcome is unknown. Checking is manual: if the image service restarted, checking this request may start another generation.</p>}
       {note && <p className="image-job-note" role="status">{note}</p>}
       <div className="image-job-actions">
         {url && <a href={url} download={`kiddo-${id.slice(0, 8)}.png`}><Download size={14} aria-hidden="true"/>Download image</a>}
