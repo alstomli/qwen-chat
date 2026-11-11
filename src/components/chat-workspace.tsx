@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { ArrowUp, ArrowUpRight, Check, ChevronDown, Code2, Compass, Copy, Feather, ImagePlus, LoaderCircle, LogOut, Menu, MessageSquare, PanelLeftClose, Plus, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, X, RotateCcw } from "lucide-react";
+import { ArrowUp, ArrowUpRight, Check, Code2, Compass, Copy, Feather, ImagePlus, LoaderCircle, LogOut, Menu, MessageSquare, PanelLeftClose, Plus, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, X, RotateCcw } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { RequestDiagnostics, exportDiagnostics } from "@/components/request-diagnostics";
@@ -20,7 +20,7 @@ import { useCloudHistory } from "@/lib/use-cloud-history";
 
 import { browserAuth } from "@/lib/supabase/browser";
 import { accountStorageKey } from "@/lib/account-storage";
-import { DEFAULT_MODEL, MODELS, modelInfo, answerModelLabel, type ModelId } from "@/lib/models";
+import { DEFAULT_MODEL, modelInfo, answerModelLabel, type ModelId } from "@/lib/models";
 import { allModelStatusRequests, initialModelConnections, updateModelConnection } from "@/lib/model-status";
 const starters = [
   { icon: Feather, label: "Find the right words", text: "Help me write a thoughtful email to reconnect with an old colleague. Keep it warm and natural.", caption: "A first draft, a fresh perspective" },
@@ -55,11 +55,10 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   const [sidebar, setSidebar] = useState(false); const [settings, setSettings] = useState(false); const [deleting, setDeleting] = useState<string | null>(null);
   const [connections, setConnections] = useState(initialModelConnections);
   const statusRequests = useRef<ReturnType<typeof allModelStatusRequests> | null>(null);
-  const [draftModel, setDraftModel] = useState<ModelId>(DEFAULT_MODEL);
   const [draftAdapter, setDraftAdapter] = useState(true);
   const [streamingChats, setStreamingChats] = useState<Set<string>>(() => new Set());
-  const [toast, setToast] = useState(""); const [preferences, setPreferences] = useState<ModelSettings>({ "4bit": { ...DEFAULT_SETTINGS }, bf16: { ...DEFAULT_SETTINGS } }); const [temperature, setTemperature] = useState(0.7);
-  const [diagnosticsEnabled, setDiagnosticsEnabled] = useState<Record<ModelId, boolean>>({ "4bit": false, bf16: false });
+  const [toast, setToast] = useState(""); const [preferences, setPreferences] = useState<ModelSettings>({ bf16: { ...DEFAULT_SETTINGS } }); const [temperature, setTemperature] = useState(0.7);
+  const [diagnosticsEnabled, setDiagnosticsEnabled] = useState<Record<ModelId, boolean>>({ bf16: false });
   const [diagnosticRecords, setDiagnosticRecords] = useState<DiagnosticRecord[]>([]);
   const diagnosticsById = new Map(diagnosticRecords.map(record => [record.id, record]));
   function patchDiagnostic(id: string, patch: Partial<DiagnosticRecord>) {
@@ -78,7 +77,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   const textarea = useRef<HTMLTextAreaElement>(null); const searchInput = useRef<HTMLInputElement>(null); const bottom = useRef<HTMLDivElement>(null); const scroller = useRef<HTMLDivElement>(null); const follow = useRef(true); const dialog = useRef<HTMLDivElement>(null);
   const active = chats.find(c => c.id === activeId); const messages = active?.messages ?? [];
   const busy = activeId !== null && streamingChats.has(activeId);
-  const selectedModel = active?.model ?? draftModel;
+  const selectedModel = active?.model ?? DEFAULT_MODEL;
   const connection = connections[selectedModel];
   const selectedAdapter = canUseAdvancedSettings ? active ? active.useAdapter ?? true : draftAdapter : false;
   const adapterAvailable = selectedModel === "bf16" && connection.adapterToggleAvailable === true;
@@ -88,8 +87,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   const limits = connection.limits ?? SETTINGS_MAX;
   const effectiveSettings = settingsForAccess(preferences[selectedModel], canUseAdvancedSettings, limits);
   const imageInput = selectedModel === "bf16" && connection.mode === "live" && connection.ready ? connection.imageInput : undefined;
-  const imageUnavailable = selectedModel !== "bf16" ? "Select the BF16 model to attach an image."
-    : !imageInput ? "Image attachments require a connected BF16 gateway with image input enabled."
+  const imageUnavailable = !imageInput ? "Image attachments require a connected BF16 gateway with image input enabled."
     : !canUseAdvancedSettings && !adapterAvailable ? "Reconnect BF16 to a gateway that can verify base model mode before attaching an image."
     : adapterAvailable && selectedAdapter ? IMAGE_ADAPTER_ERROR : "";
   const attachmentUnavailable = searchWeb ? "Turn off Search web before attaching an image." : imageUnavailable;
@@ -98,12 +96,12 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
 
   useEffect(() => {
     if (!authenticated) return;
-    try { const stored = parseConversations(localStorage.getItem(storageKey)); legacyIds.current = new Set(stored.map(chat => chat.id)); setChats(stored); setActiveId(stored[0]?.id ?? null); setDiagnosticRecords([]); setDiagnosticsEnabled({ "4bit": false, bf16: false }); setHistoryNotice(localStorage.getItem(accountStorageKey(HISTORY_NOTICE_KEY, userId)) !== "dismissed"); }
+    try { const stored = parseConversations(localStorage.getItem(storageKey)); legacyIds.current = new Set(stored.map(chat => chat.id)); setChats(stored); setActiveId(stored[0]?.id ?? null); setDiagnosticRecords([]); setDiagnosticsEnabled({ bf16: false }); setHistoryNotice(localStorage.getItem(accountStorageKey(HISTORY_NOTICE_KEY, userId)) !== "dismissed"); }
     catch { setToast("Your browser couldn't load saved conversations."); }
     try {
       const raw = localStorage.getItem(settingsKey);
-      setPreferences(canUseAdvancedSettings ? parseModelSettings(localStorage.getItem(modelSettingsKey), raw)
-        : { "4bit": { ...DEFAULT_SETTINGS }, bf16: { ...DEFAULT_SETTINGS } });
+      setPreferences(canUseAdvancedSettings ? parseModelSettings(localStorage.getItem(modelSettingsKey))
+        : { bf16: { ...DEFAULT_SETTINGS } });
       const temperature = JSON.parse(raw ?? "null")?.temperature;
       if (typeof temperature === "number" && Number.isFinite(temperature) && temperature >= 0 && temperature <= 1.5) setTemperature(temperature);
     } catch { setToast("Your browser couldn't load saved settings."); }
@@ -120,7 +118,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
     if (!loaded || !authenticated) return;
     try {
       if (canUseAdvancedSettings) localStorage.setItem(modelSettingsKey, JSON.stringify(preferences));
-      localStorage.setItem(settingsKey, JSON.stringify(canUseAdvancedSettings ? { ...preferences["4bit"], temperature } : { temperature }));
+      localStorage.setItem(settingsKey, JSON.stringify({ temperature }));
     }
     catch { setToast("Your browser couldn't save settings. They will only apply in this tab."); }
   }, [preferences, temperature, loaded, authenticated, canUseAdvancedSettings]);
@@ -185,7 +183,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   function newChat() {
     if (!switchConversation(null)) return;
     if (activeId === null && !attachment && !retryImageId) clearDraft();
-    setDraftModel(selectedModel); setDraftAdapter(true); textarea.current?.focus();
+    setDraftAdapter(true); textarea.current?.focus();
   }
   async function chooseImage(file: File) {
     if (attachmentUnavailable || !imageInput) { setToast(attachmentUnavailable); return; }
@@ -211,13 +209,6 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
     if (!canUseAdvancedSettings || (activeId && controllers.current.has(activeId)) || !adapterAvailable || !connection.ready) return;
     if (activeId) setChats(previous => previous.map(chat => chat.id === activeId ? { ...chat, useAdapter } : chat));
     else setDraftAdapter(useAdapter);
-  }
-  function selectModel(model: ModelId) {
-    if (activeId && controllers.current.has(activeId)) return;
-    if (searchWeb) { setSearchWeb(false); setToast("Search web was turned off for the model change."); }
-    if (activeId) setChats(prev => prev.map(chat => chat.id === activeId ? { ...chat, model } : chat));
-    else setDraftModel(model);
-    void statusRequests.current?.refresh();
   }
   function updateMessage(chatId: string, messageId: string, patch: Partial<Message> | ((m: Message) => Partial<Message>)) {
     setChats(prev => prev.map(chat => chat.id !== chatId ? chat : { ...chat, messages: chat.messages.map(m => m.id === messageId ? { ...m, ...(typeof patch === "function" ? patch(m) : patch) } : m) }));
@@ -430,7 +421,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
       <div className="sidebar-bottom"><div className="history-sync"><div className="private-note"><ShieldCheck size={15}/><span>Cloud history · {cloud?.usage.count ?? 0} / 50 chats</span></div><p>{cloud?.offline ? "Last known usage · " : ""}{((cloud?.usage.bytes ?? 0) / 1_000_000).toFixed(2)} MB / 2 MB <span className="sr-only">({cloud?.usage.bytes ?? 0} of 2,000,000 UTF-8 bytes)</span></p><p role="status">{saveLabel}</p>{hasPending && <button onClick={() => { void cloud?.retry(); }}>Retry sync</button>}{cloud?.offline && !hasPending && <button onClick={() => { void cloud.refresh(); }}>Retry loading history</button>}</div><button className="profile-button" onClick={() => setSettings(true)}><span className="avatar">{email[0]?.toUpperCase()}</span><span><strong>Your workspace</strong><small>{email}</small></span><Settings2 size={17}/></button></div>
     </aside>
     <div className="main-shell">
-      <header className="workspace-header"><div className="workspace-heading"><button className="icon-button mobile-only" onClick={() => setSidebar(true)} aria-label="Open sidebar"><Menu size={20}/></button><span className="header-label">Personal workspace</span><span className="header-slash">/</span><label className="model-picker"><span className="sr-only">Model</span><select aria-label="Model" value={selectedModel} disabled={busy} onChange={e => selectModel(e.target.value as ModelId)}>{MODELS.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}</select><ChevronDown size={14} aria-hidden="true"/></label></div><button className={`connection-pill ${connection.mode === "live" && connection.ready ? "online" : preview ? "preview" : "offline"}`} onClick={() => setSettings(true)}><span/>{preview ? "Local preview" : connection.mode === "checking" ? "Connecting" : connection.mode === "unconfigured" ? "Setup needed" : connection.ready ? "Model online" : "Model offline"}<ArrowUpRight size={13}/></button></header>
+      <header className="workspace-header"><div className="workspace-heading"><button className="icon-button mobile-only" onClick={() => setSidebar(true)} aria-label="Open sidebar"><Menu size={20}/></button><span className="header-label">Personal workspace</span><span className="header-slash">/</span><span className="workspace-model">{modelInfo(DEFAULT_MODEL).label}</span></div><button className={`connection-pill ${connection.mode === "live" && connection.ready ? "online" : preview ? "preview" : "offline"}`} onClick={() => setSettings(true)}><span/>{preview ? "Local preview" : connection.mode === "checking" ? "Connecting" : connection.mode === "unconfigured" ? "Setup needed" : connection.ready ? "Model online" : "Model offline"}<ArrowUpRight size={13}/></button></header>
       {active && isLocal(active) && <div className="history-local-note" role="status">{(legacyIds.current.has(active.id) ? !legacyDurable : !cloud?.durable) ? "Browser storage is unavailable. This copy is only in this tab; export it now to keep it." : legacyIds.current.has(active.id) ? "This older conversation stays on this browser, including new replies." : activeEntry?.state === "oversized" && !cloud?.durable ? "This chat is too large for cloud history and browser storage is unavailable. Export it now to keep a copy." : activeEntry?.state === "oversized" ? "This chat is too large for cloud history. It’s saved on this browser; export it to keep a copy." : activeEntry?.state === "conflict" ? "This chat changed on another device. Your unsynced copy stays on this browser." : activeEntry?.state === "create_limited" ? "Too many recent cloud chat changes. This chat stays on this browser; try a new chat later." : "This chat stays on this browser. Export it to keep a copy."}<button disabled={exporting} onClick={() => { void downloadHistory("json"); }}>Export JSON</button><button onClick={newChat}>Start new chat</button></div>}
       {cloud?.usage.paused && <div className="history-local-note" role="status">{cloud.durable ? "Cloud saving is temporarily paused. Your conversations stay on this browser until sync resumes. You can keep chatting, export, or delete history." : "Cloud saving is paused and browser storage is unavailable. Export your conversations now to keep a copy. You can keep chatting or delete history."}</div>}
       <main className={`chat-main ${messages.length ? "has-messages" : ""}`} ref={scroller} onScroll={() => { const el = scroller.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>
@@ -507,7 +498,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
     </div>
     {toast && <div className="toast" role="status">{toast}<button onClick={() => setToast("")} aria-label="Dismiss notification"><X size={14}/></button></div>}
     {(settings || deleting) && <div className="modal-backdrop" onClick={() => { setSettings(false); setDeleting(null); }}><div className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" ref={dialog} onKeyDown={trapFocus} onClick={e => e.stopPropagation()}><button className="icon-button close-dialog" onClick={() => { setSettings(false); setDeleting(null); }} aria-label="Close dialog"><X size={20}/></button>{deleting ? <><div className="eyebrow">MAKE A LITTLE ROOM</div><h2 id="dialog-title">Delete this conversation?</h2><p>{deleting && !legacyIds.current.has(deleting) && ((cloud?.entries.get(deleting)?.revision ?? 0) > 0 || cloud?.entries.get(deleting)?.mayExistRemotely || !localStates.includes(cloud?.entries.get(deleting)?.state ?? "saved")) ? "This removes the conversation from cloud history on all your devices. It can’t be undone." : "This removes the conversation from this browser. It can’t be undone."}</p><div className="dialog-buttons"><button className="secondary-button" onClick={() => setDeleting(null)}>Keep conversation</button><button className="danger-button" onClick={deleteConversation}>Delete conversation</button></div></> : <><div className="eyebrow">MAKE YOURSELF AT HOME</div><h2 id="dialog-title">Your workspace</h2><ModelSettingsPanel connections={connections} preferences={preferences} busy={streamingChats.size > 0}
-      canUseAdvancedSettings={canUseAdvancedSettings} selectedModel={selectedModel} selectedAdapter={selectedAdapter} adapterBusy={busy} onAdapterChange={selectAdapter}
+      canUseAdvancedSettings={canUseAdvancedSettings} selectedAdapter={selectedAdapter} adapterBusy={busy} onAdapterChange={selectAdapter}
       temperature={temperature} onTemperatureChange={setTemperature}
       diagnosticsEnabled={diagnosticsEnabled} onDiagnosticsChange={(model, enabled) => { if (canUseAdvancedSettings) setDiagnosticsEnabled(previous => ({ ...previous, [model]: enabled })); }}
       onRefresh={() => { void statusRequests.current?.refresh(); }}

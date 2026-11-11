@@ -9,12 +9,14 @@ export async function checkBrowserTimings(base, authFixture, admissionIs) {
     const page = await browser.newPage();
     const pageErrors = [];
     page.on('pageerror', error => pageErrors.push(error.message));
+    const admin = authFixture.users.get('timings@example.com')?.user ?? authFixture.addUser('timings@example.com');
+    admin.id = 'd06b78ab-e282-4760-8698-884ec5b5fc85';
     await page.goto(base);
     authFixture.setNextIdentity('timings@example.com');
     await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
     await page.getByRole('button', { name: 'Model online' }).waitFor();
     await page.getByRole('button', { name: 'Your workspace' }).click();
-    const settings = page.locator('details.model-settings-section').filter({ hasText: 'Qwen3.8-27B-4bit' });
+    const settings = page.locator('details.model-settings-section').filter({ hasText: 'Qwen3.8-27B-bf16' });
     await settings.locator('summary').click();
     await settings.getByRole('switch', { name: 'Request diagnostics', exact: true }).check();
     await page.getByRole('button', { name: 'Close dialog' }).click();

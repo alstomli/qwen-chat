@@ -22,7 +22,7 @@ async function gatewayFixture(run: (fixture: {
   request: (body?: object, headers?: Record<string, string>, cookieUserId?: string) => Request;
 }) => Promise<void>) {
   const savedEnv = { ...process.env }; const savedFetch = globalThis.fetch;
-  Object.assign(process.env, { NODE_ENV: "production", RUNPOD_CHAT_URL: "https://four.example", RUNPOD_CHAT_TOKEN: "4".repeat(48),
+  Object.assign(process.env, { NODE_ENV: "production",
     RUNPOD_BF16_CHAT_URL: "https://bf.example", RUNPOD_BF16_CHAT_TOKEN: "b".repeat(48), CHAT_DIAGNOSTICS_ENABLED: "true" });
   const fixture = { auth: {} as Parameters<typeof authResponse>[2], limits: { ...SETTINGS_MAX }, adapterAvailable: true,
     adapterConfirmation: "false", calls: [] as { url: string; headers: Headers; body?: ReturnType<typeof validateInput> }[],
@@ -35,7 +35,7 @@ async function gatewayFixture(run: (fixture: {
     const auth = authResponse(input, init, fixture.auth); if (auth) return auth;
     const url = String(input); const headers = new Headers(init?.headers);
     fixture.calls.push({ url, headers, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-    if (url.endsWith("/health")) return Response.json({ ready: true, model: url.startsWith("https://bf.") ? "qwen-bf16" : "qwen",
+    if (url.endsWith("/health")) return Response.json({ ready: true, model: "qwen-bf16",
       settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true, limits: fixture.limits, adapterToggleVersion: 1, adapterToggleAvailable: fixture.adapterAvailable, diagnosticsVersion: 1 });
     return new Response(sse, { headers: { "X-Chat-Adapter-Enabled": fixture.adapterConfirmation } });
   };
@@ -68,12 +68,11 @@ test("only the two verified account IDs grant advanced access; metadata, headers
 });
 
 test("restored preferences and conversation adapter flags cannot override normal account defaults", () => {
-  const preferences = parseModelSettings(JSON.stringify({ "4bit": { ...DEFAULT_SETTINGS, outputTokens: 128, reuseCachedPrefixes: false },
-    bf16: { ...DEFAULT_SETTINGS, outputTokens: 256, reuseCachedPrefixes: false } }), null);
+  const preferences = parseModelSettings(JSON.stringify({ bf16: { ...DEFAULT_SETTINGS, outputTokens: 256, reuseCachedPrefixes: false } }));
   const [chat] = parseConversations(JSON.stringify([{ id: "restored", title: "Old admin preferences", updatedAt: 1, model: "bf16",
     useAdapter: true, messages: [{ id: "old", role: "assistant", model: "bf16", useAdapter: true, content: "Historical answer" }] }]));
   assert.deepEqual(settingsForAccess(preferences.bf16, false, smallLimits), fitSettings(DEFAULT_SETTINGS, smallLimits));
-  assert.equal(settingsForAccess(preferences["4bit"], false).reuseCachedPrefixes, true);
+  assert.equal(settingsForAccess(preferences.bf16, false).reuseCachedPrefixes, true);
   assert.equal(adapterForAccess("bf16", chat.useAdapter, false), false);
   assert.equal(adapterForAccess("bf16", undefined, false), false);
   assert.equal(adapterForAccess("bf16", chat.useAdapter, true), true);
@@ -102,7 +101,7 @@ test("normal crafted requests replace every restricted field and fit defaults to
       const response = await POST(fixture.request({ settings, max_tokens: 10240 }));
       assert.equal(response.status, 200); await response.text();
       assert.equal(fixture.calls.at(-1)!.body!.max_tokens, expected.outputTokens);
-      assert.equal(Object.hasOwn(fixture.calls.at(-1)!.body!, "useAdapter"), false);
+      assert.equal(fixture.calls.at(-1)!.body!.useAdapter, false);
     }
     const sentCount = fixture.calls.filter(call => call.body).length;
     for (const body of [{ messages: [{ role: "user", content: "x".repeat(51) }] },

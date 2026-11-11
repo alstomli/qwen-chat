@@ -1,7 +1,7 @@
 import { parseSourceMetadata } from "./history-metadata";
 import { parseWebMetadata } from "./web-search";
 import { isModelId } from "./models";
-import type { Conversation, Message } from "./storage";
+import { hasSupportedModels, type Conversation, type Message } from "./storage";
 
 export const CLOUD_CACHE_KEY = "qwen-chat.cloud-history.v1";
 export const HISTORY_NOTICE_KEY = "qwen-chat.history-notice.v1";
@@ -33,7 +33,7 @@ export function historyMarkdown(chats: Conversation[]) {
   return chats.map(chat => `# ${chat.title}\n\n${chat.messages.map(m => `## ${m.role === "user" ? "You" : "Assistant"}${m.model ? ` (${m.model}${m.useAdapter === true ? " + adapter" : ""})` : ""}\n\n${m.content}${m.imageName ? `\n\n[Image filename: ${m.imageName}; image not included]` : ""}${m.state ? `\n\n_State: ${m.state}_` : ""}${m.note ? `\n\n${m.note}` : ""}${m.docsSources?.map(s => `\n\n[${s.id}] ${s.heading}: ${s.url}`).join("") ?? ""}${m.webSearch ? `\n\n_Web search: ${m.webSearch.outcome}_` + m.webSearch.sources.map(s => `\n\n[${s.sourceId}] ${s.title}: ${s.url} (retrieved ${s.retrievedAt}; ${s.evidenceKind})`).join("") : ""}`).join("\n\n")}`).join("\n\n---\n\n");
 }
 export function exportHistory(chats: Conversation[], format: "json" | "md") {
-  const safe = chats.map(chat => ({ id: chat.id, updatedAt: chat.updatedAt, ...cloudPayload(chat) }));
+  const safe = chats.filter(hasSupportedModels).map(chat => ({ id: chat.id, updatedAt: chat.updatedAt, ...cloudPayload(chat) }));
   const blob = new Blob([format === "json" ? JSON.stringify(safe, null, 2) : historyMarkdown(safe)], { type: format === "json" ? "application/json" : "text/markdown;charset=utf-8" });
   const url = URL.createObjectURL(blob); const link = document.createElement("a");
   link.href = url; link.download = `kiddo-history-${new Date().toISOString().slice(0, 10)}.${format}`; link.click();
@@ -55,7 +55,8 @@ export class CloudHistoryStore {
     try {
       const rows: HistoryEntry[] = JSON.parse(this.storage.getItem(this.key) ?? "[]");
       if (Array.isArray(rows)) for (const e of rows) {
-        if (!e?.chat?.id || !Array.isArray(e.chat.messages) || typeof e.revision !== "number") continue;
+        if (!e?.chat?.id || !Array.isArray(e.chat.messages) || typeof e.revision !== "number"
+          || !hasSupportedModels(e.chat) || (e.operation && !hasSupportedModels(e.operation.payload))) continue;
         e.chat = { ...e.chat, ...cloudPayload(e.chat) }; this.entries.set(e.chat.id, e);
       }
       this.merge([...this.entries.values()].filter(e => !e.deleting).map(e => e.chat));
@@ -81,10 +82,11 @@ export class CloudHistoryStore {
         if (next.error || !Array.isArray(next.data)) throw new Error("History unavailable");
         page = next.data; rows.push(...page);
       }
+      const supportedRows = rows.filter(hasSupportedModels);
       // A response that started before any local mutation cannot reconcile newer local state.
       if (epoch !== this.mutationEpoch) { this.ready = true; this.changed(); return; }
       this.usage = usage.data as HistoryUsage;
-      const ids = new Set(rows.map(r => r.id)); const removed: string[] = [];
+      const ids = new Set(supportedRows.map(r => r.id)); const removed: string[] = [];
       for (const [id, entry] of this.entries) {
         if (entry.revision > 0 && !ids.has(id) && !entry.deleting) {
           if (entry.operation || entry.state !== "saved" || this.protectedChat(id)) {
@@ -93,7 +95,7 @@ export class CloudHistoryStore {
           } else { this.entries.delete(id); removed.push(id); }
         }
       }
-      for (const row of rows) {
+      for (const row of supportedRows) {
         const current = this.entries.get(row.id);
         if (current?.deleting || current?.operation || this.protectedChat(row.id) || (current && !["saved", "saving"].includes(current.state))) continue;
         if (!current || current.revision < row.revision) {
@@ -125,6 +127,7 @@ export class CloudHistoryStore {
         if (response.error) throw new Error("Couldn't load this conversation. Try again.");
         const data = response.data as { payload: ReturnType<typeof cloudPayload>; revision: number; totalMessages: number; updatedAt: number } | null;
         if (!data) { this.entries.delete(id); this.merge([], [id]); this.persist(); return null; }
+        if (!hasSupportedModels(data.payload)) { this.entries.delete(id); this.merge([], [id]); this.persist(); return null; }
         if (revision !== undefined && revision !== data.revision) { changed = true; break; }
         revision = data.revision;
         result ??= { id, ...data.payload, messages: [], updatedAt: data.updatedAt };
@@ -143,7 +146,7 @@ export class CloudHistoryStore {
     throw new Error("This conversation keeps changing on another device. Try again.");
   }
   stage(chat: Conversation) {
-    if (this.disposed) return;
+    if (this.disposed || !hasSupportedModels(chat)) return;
     let entry = this.entries.get(chat.id);
     if (entry && (!entry.loaded || entry.deleting)) return;
     const payload = cloudPayload(chat), fingerprint = JSON.stringify(payload);

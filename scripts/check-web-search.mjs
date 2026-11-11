@@ -8,16 +8,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { startAuthFixture } from './auth-test-fixture.mjs';
 const { chromium } = await import(process.env.CHAT_TEST_PLAYWRIGHT ? pathToFileURL(resolve(process.env.CHAT_TEST_PLAYWRIGHT)).href : 'playwright-core');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const screenshots = resolve(root, '../images-in-chat/web-search');
+const screenshots = resolve(root, process.env.CHAT_TEST_SCREENSHOT_DIR ?? '../images-in-chat/web-search');
 const base = 'http://127.0.0.1:3002', token = 'local-web-fixture-credential-'.repeat(3);
 const limits = { inputCharacters:120000, outputTokens:10240, contextTokens:40960, historyMessages:799, historyBytes:580000, requestBytes:640000, timeoutSeconds:2400, safetyTokens:4096, reuseCachedPrefixes:true };
 const requests = []; let behavior = 'success'; let disconnected = false;
 const source = { sourceId:'S1', title:'Fixture source', url:'https://example.com/web-fixture', retrievedAt:'2026-11-10T13:00:00Z', evidenceKind:'page' };
 const gateway = createServer(async (req, res) => {
   if (req.headers.authorization !== `Bearer ${token}`) { res.writeHead(401).end(); return; }
-  if (req.url === '/health') { res.setHeader('Content-Type','application/json'); res.end(JSON.stringify({ ready:true, model:'qwen', settingsVersion:1, accountQuotaVersion:1, accountQuotasEnforced:true, limits, webSearchVersion:1, webSearchAvailable:true, webSearch:{models:[{useAdapter:false,available:true}]} })); return; }
+  if (req.url === '/health') { res.setHeader('Content-Type','application/json'); res.end(JSON.stringify({ ready:true, model:'qwen-bf16', settingsVersion:1, accountQuotaVersion:1, accountQuotasEnforced:true, adapterToggleVersion:1, adapterToggleAvailable:true, limits, webSearchVersion:1, webSearchAvailable:true, webSearch:{models:[{useAdapter:false,available:true}]} })); return; }
   let raw=''; for await (const chunk of req) raw+=chunk; const body=JSON.parse(raw); requests.push(body);
-  res.setHeader('Content-Type','text/event-stream'); if(body.webSearch)res.setHeader('X-Chat-Web-Search','1'); res.flushHeaders();
+  res.setHeader('X-Chat-Adapter-Enabled', 'false'); res.setHeader('Content-Type','text/event-stream'); if(body.webSearch)res.setHeader('X-Chat-Web-Search','1'); res.flushHeaders();
   const event=(name,sequence,extra)=>res.write(`event: ${name}\ndata: ${JSON.stringify({version:1,runId:'fixture_'+requests.length,sequence,...extra})}\n\n`);
   const delta=text=>res.write(`data: ${JSON.stringify({choices:[{delta:{content:text}}]})}\n\n`);
   if (!body.webSearch) { delta('Ordinary fixture answer.'); res.end('data: [DONE]\n\n'); return; }
@@ -32,7 +32,7 @@ const gateway = createServer(async (req, res) => {
 let app,browser,logs=''; const auth=await startAuthFixture(18005);
 try {
   await new Promise(r=>gateway.listen(18019,'127.0.0.1',r));
-  app=spawn(process.execPath,['node_modules/next/dist/bin/next','dev','--hostname','127.0.0.1','--port','3002','--webpack'],{cwd:root,stdio:['ignore','pipe','pipe'],env:{...process.env,NODE_ENV:'development',NEXT_TELEMETRY_DISABLED:'1',CHAT_TEST_DIST_DIR:'.next-integration',NEXT_PUBLIC_SUPABASE_URL:auth.url,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'fixture-public-key',RUNPOD_CHAT_URL:'http://127.0.0.1:18019',RUNPOD_CHAT_TOKEN:token,RUNPOD_BF16_CHAT_URL:'',RUNPOD_BF16_CHAT_TOKEN:'',CHAT_PREVIEW_MODE:'false'}});
+  app=spawn(process.execPath,['node_modules/next/dist/bin/next','dev','--hostname','127.0.0.1','--port','3002','--webpack'],{cwd:root,stdio:['ignore','pipe','pipe'],env:{...process.env,NODE_ENV:'development',NEXT_TELEMETRY_DISABLED:'1',CHAT_TEST_DIST_DIR:'.next-integration',NEXT_PUBLIC_SUPABASE_URL:auth.url,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'fixture-public-key',RUNPOD_BF16_CHAT_URL:'http://127.0.0.1:18019',RUNPOD_BF16_CHAT_TOKEN:token,CHAT_PREVIEW_MODE:'false'}});
   app.stdout.on('data',b=>logs+=b);app.stderr.on('data',b=>logs+=b);
   let ready=false;for(let i=0;i<100;i++){try{if((await fetch(base)).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,300));}assert.ok(ready,logs);
   browser=await chromium.launch({headless:true,channel:'msedge'});const context=await browser.newContext();const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));

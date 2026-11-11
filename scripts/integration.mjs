@@ -11,7 +11,7 @@ const token = 'integration-test-token-' + 'x'.repeat(40);
 const fixturePython = process.env.CHAT_TEST_FIXTURE_PYTHON;
 const fixtureRoot = resolve(root, process.env.CHAT_TEST_FIXTURE_ROOT ?? '../llm-inference-server');
 const imageInput = process.env.CHAT_TEST_IMAGE_INPUT === 'true';
-const imageGateway = 'http://127.0.0.1:18003';
+const imageGateway = 'http://127.0.0.1:18001';
 const password = randomBytes(24).toString('hex');
 assert.ok(!imageInput || fixturePython, 'Set CHAT_TEST_FIXTURE_PYTHON for the image input integration check');
 let authFixture; let server; let logs = '';
@@ -40,25 +40,25 @@ async function admissionIs(active, waiting) {
 function startFixture(modelPort, port, vision = false) {
   const fixture = spawn(fixturePython, [resolve(fixtureRoot, 'scripts/chat_test_fixture.py')], {
     stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, CHAT_DIAGNOSTICS_ENABLED: 'true',
-      CHAT_FIXTURE_MODEL_PORT: modelPort, CHAT_FIXTURE_PORT: port, CHAT_FIXTURE_IMAGE_INPUT: String(vision), CHAT_FIXTURE_ADAPTER: 'false' },
+      CHAT_FIXTURE_MODEL_PORT: modelPort, CHAT_FIXTURE_PORT: port, CHAT_FIXTURE_IMAGE_INPUT: String(vision), CHAT_FIXTURE_ADAPTER: 'true' },
   });
   fixtures.push(fixture);
   fixture.stdout.on('data', chunk => logs += chunk); fixture.stderr.on('data', chunk => logs += chunk);
 }
 try {
   authFixture = await startAuthFixture();
+  // Exercise admin diagnostics/settings using a disposable local identity only.
+  authFixture.users.get('test@example.com').user.id = '71fd4edb-4aeb-472c-a96b-3b2fdeb4f285';
   if (fixturePython) {
-    startFixture('18000', '18001');
-    if (imageInput) startFixture('18002', '18003', true);
+    startFixture('18000', '18001', imageInput);
   } else {
-    const fixture = spawnSync('docker', ['run', '-d', '--rm', '--name', name, '-e', 'CHAT_DIAGNOSTICS_ENABLED=true', '-p', '127.0.0.1:18001:8001', '--entrypoint', 'python3', '--mount', `type=bind,source=${resolve(fixtureRoot, 'scripts')},target=/tests,readonly`, 'zihan000/qwen-inference:chat-dev', '/tests/chat_test_fixture.py'], { encoding: 'utf8' });
+    const fixture = spawnSync('docker', ['run', '-d', '--rm', '--name', name, '-e', 'CHAT_DIAGNOSTICS_ENABLED=true', '-e', 'CHAT_FIXTURE_ADAPTER=true', '-p', '127.0.0.1:18001:8001', '--entrypoint', 'python3', '--mount', `type=bind,source=${resolve(fixtureRoot, 'scripts')},target=/tests,readonly`, 'zihan000/qwen-inference:chat-dev', '/tests/chat_test_fixture.py'], { encoding: 'utf8' });
     assert.equal(fixture.status, 0, fixture.stderr);
   }
   await waitFor('http://127.0.0.1:18001/health', { Authorization: 'Bearer ' + token });
-  if (imageInput) await waitFor(imageGateway + '/health', { Authorization: 'Bearer ' + token });
   server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'dev', ...(process.env.CHAT_TEST_WEBPACK === 'true' ? ['--webpack'] : []), '--hostname', '127.0.0.1', '--port', '3002'], {
-    cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NODE_ENV: 'development', NEXT_TELEMETRY_DISABLED: '1', CHAT_DIAGNOSTICS_ENABLED: 'true', CHAT_TEST_DIST_DIR: '.next-integration', NEXT_PUBLIC_SUPABASE_URL: authFixture.url, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "fixture-public-key", RUNPOD_CHAT_URL: 'http://127.0.0.1:18001', RUNPOD_CHAT_TOKEN: token, CHAT_PREVIEW_MODE: 'false',
-      RUNPOD_BF16_CHAT_URL: imageInput ? imageGateway : '', RUNPOD_BF16_CHAT_TOKEN: imageInput ? token : '', RUNPOD_IMAGE_API_KEY: '' },
+    cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NODE_ENV: 'development', NEXT_TELEMETRY_DISABLED: '1', CHAT_DIAGNOSTICS_ENABLED: 'true', CHAT_TEST_DIST_DIR: '.next-integration', NEXT_PUBLIC_SUPABASE_URL: authFixture.url, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "fixture-public-key", CHAT_PREVIEW_MODE: 'false',
+      RUNPOD_BF16_CHAT_URL: 'http://127.0.0.1:18001', RUNPOD_BF16_CHAT_TOKEN: token, RUNPOD_IMAGE_API_KEY: '' },
   });
   server.stdout.on('data', chunk => logs += chunk); server.stderr.on('data', chunk => logs += chunk);
   await waitFor(base);
@@ -70,8 +70,9 @@ try {
   const cookie = 'sb-127-auth-token=base64-' + Buffer.from(JSON.stringify(session)).toString('base64url'); headers.Cookie = cookie;
   // Each fixture identity has an independent verified UUID; a new session for the
   // same identity must still consume the same account quota.
-  const accountHeaders = email => {
+  const accountHeaders = (email, admin = false) => {
     const user = authFixture.users.get(email)?.user ?? authFixture.addUser(email);
+    if (admin) user.id = 'd06b78ab-e282-4760-8698-884ec5b5fc85';
     const issued = authFixture.issue(user);
     return { ...headers, Cookie: 'sb-127-auth-token=base64-' + Buffer.from(JSON.stringify(issued)).toString('base64url') };
   };
@@ -129,7 +130,7 @@ try {
     response = await fetch(base + '/api/chat', { method: 'POST', headers: cancellationHeaders, body: JSON.stringify({ messages: [{ role: 'user', content: 'After cancellation' }] }) });
     assert.equal(response.status, 200); await response.text();
     const pending = []; const running = [];
-    const globalHeaders = Array.from({ length: 10 }, (_, index) => accountHeaders('global-' + index + '@example.com'));
+    const globalHeaders = Array.from({ length: 10 }, (_, index) => accountHeaders('global-' + index + '@example.com', index === 9));
 
     try {
       for (let index = 0; index < 2; index++) {
@@ -168,8 +169,10 @@ try {
     response = await fetch(base + '/api/chat', { method: 'POST', headers: globalHeaders[8], body: JSON.stringify({ messages: [{ role: 'user', content: 'After queue cleanup' }] }) });
     assert.equal(response.status, 200); await response.text();
     if (imageInput) {
+      // Image checks now share the sole BF16 gateway's global minute budget.
+      await sleep(60_000);
       const { checkImageInput } = await import('./check-image-input.mjs');
-      await checkImageInput({ base, gateway: imageGateway, token, headers, authFixture });
+      await checkImageInput({ base, gateway: imageGateway, token, headers: globalHeaders[9], authFixture });
     }
     assert.equal((await fetch(base + '/api/logout', { method: 'POST', headers })).status, 200);
     assert.equal((await fetch(base + '/api/status', { headers: { Cookie: cookie } })).status, 401);

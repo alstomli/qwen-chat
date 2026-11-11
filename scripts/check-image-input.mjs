@@ -30,7 +30,7 @@ export async function checkImageInput({ base, gateway, token, headers, authFixtu
   assert.equal(capabilities.imageInputVersion, 1);
   assert.equal(capabilities.imageInput.maxBytes, 262144);
   assert.equal(capabilities.imageInput.maxDimension, 2048);
-  assert.equal((await (await get('/api/status?model=4bit')).json()).imageInput, undefined);
+  assert.equal((await get('/api/status?model=4bit')).status, 400);
   const oldExchange = [{ role: 'user', content: 'An older question.' }, { role: 'assistant', content: 'An older answer.' }];
   const imageResponse = await ask({ ...request, messages: [...oldExchange, ...request.messages], image: imageData }, { 'X-Chat-Diagnostics': '1' });
   const imageEvents = await readStream(imageResponse);
@@ -76,7 +76,7 @@ async function checkBrowser(base, authFixture) {
     await page.goto(base);
     authFixture.setNextIdentity('test@example.com');
     await page.getByRole('button', { name: 'Continue with Google', exact: true }).click();
-    await page.getByRole('combobox', { name: 'Model', exact: true }).selectOption('bf16');
+    assert.equal(await page.getByRole('combobox', { name: 'Model', exact: true }).count(), 0);
     assert.equal(await page.getByRole('switch', { name: 'Use trained adapter', exact: true }).count(), 0, 'Adapter toggle remained in the main workspace');
     assert.equal(await page.getByText('Runpod Docs', { exact: true }).count(), 0);
     await page.getByRole('button', { name: /Your workspace/ }).click();

@@ -50,7 +50,6 @@ test("web capabilities distinguish verified base and adapter aliases", () => {
   assert.equal(webSearchForProfile(capability, "bf16", true), false);
   assert.equal(webSearchForProfile(capability, "bf16", false), true);
   assert.equal(webSearchForProfile({ webSearchAvailable: true }, "bf16", false), false);
-  assert.equal(webSearchForProfile({ webSearchAvailable: true }, "4bit"), true);
   assert.equal(parseWebSearchProfiles([{ useAdapter: false, available: true }, { useAdapter: false, available: false }]), undefined);
 });
 
@@ -108,15 +107,15 @@ test("browser, cloud and exports preserve compact citations without putting meta
 
 test("authenticated API fails closed on unsupported or unconfirmed search and validates streamed sources", async context => {
   const saved = { ...process.env }; let available = true; let accepted = true; let forwarded: Record<string, unknown> | undefined; let abortDuringHealth: (() => void) | undefined;
-  Object.assign(process.env, { NODE_ENV: "production", RUNPOD_CHAT_URL: "https://gateway.example", RUNPOD_CHAT_TOKEN: "x".repeat(48) });
+  Object.assign(process.env, { NODE_ENV: "production", RUNPOD_BF16_CHAT_URL: "https://gateway.example", RUNPOD_BF16_CHAT_TOKEN: "x".repeat(48) });
   context.mock.method(globalThis, "fetch", async (...[url, init]: Parameters<typeof fetch>) => {
     const auth = authResponse(url, init); if (auth) return auth;
     if (String(url).endsWith("/health")) {
       abortDuringHealth?.();
-      return Response.json({ ready: true, model: "qwen", settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true, limits: SETTINGS_MAX, webSearchVersion: 1, webSearchAvailable: available });
+      return Response.json({ ready: true, model: "qwen-bf16", settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true, adapterToggleVersion: 1, adapterToggleAvailable: true, limits: SETTINGS_MAX, webSearchVersion: 1, webSearchAvailable: available, webSearch: { models: [{ useAdapter: false, available }] } });
     }
     forwarded = JSON.parse(String(init?.body));
-    return new Response(webStream, { headers: accepted ? { "X-Chat-Web-Search": "1" } : {} });
+    return new Response(webStream, { headers: { "X-Chat-Adapter-Enabled": "false", ...(accepted ? { "X-Chat-Web-Search": "1" } : {}) } });
   });
   const headers = { Origin: "https://chat.example", Cookie: cookieHeader(issueSession()).split(";")[0], "Content-Type": "application/json" };
   const request = (signal?: AbortSignal) => new Request("https://chat.example/api/chat", { method: "POST", headers, signal, body: JSON.stringify({ messages, webSearch: { version: 1, mode: "required" } }) });

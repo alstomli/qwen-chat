@@ -27,8 +27,8 @@ export async function readJson(request: Request, limitForValue?: (value: unknown
 }
 export function connectionConfig(selected: ModelId = DEFAULT_MODEL) {
   const model = parseModelId(selected);
-  const base = (model === "4bit" ? process.env.RUNPOD_CHAT_URL : process.env.RUNPOD_BF16_CHAT_URL)?.replace(/\/$/, "");
-  const token = model === "4bit" ? process.env.RUNPOD_CHAT_TOKEN : process.env.RUNPOD_BF16_CHAT_TOKEN;
+  const base = process.env.RUNPOD_BF16_CHAT_URL?.replace(/\/$/, "");
+  const token = process.env.RUNPOD_BF16_CHAT_TOKEN;
   if (base && token && token.length >= 32) {
     const url = new URL(base);
     if (url.username || url.password || url.search || url.hash || url.pathname !== "/") throw new Error("Invalid gateway URL.");
@@ -52,8 +52,8 @@ export async function gatewayCapabilities(config: ReturnType<typeof connectionCo
   return { limits: parseServerLimits(body.limits), diagnosticsVersion: body.diagnosticsVersion === 1 ? 1 : 0,
     webSearchAvailable: body.webSearchVersion === 1 && body.webSearchAvailable === true,
     webSearchProfiles: body.webSearchVersion === 1 ? parseWebSearchProfiles(body.webSearch?.models) : undefined,
-    adapterToggleAvailable: config.model === "bf16" && body.adapterToggleVersion === 1 && body.adapterToggleAvailable === true,
-    imageInput: config.model === "bf16" && body.imageInputVersion === 1 ? parseImageInputLimits(body.imageInput) : undefined };
+    adapterToggleAvailable: body.adapterToggleVersion === 1 && body.adapterToggleAvailable === true,
+    imageInput: body.imageInputVersion === 1 ? parseImageInputLimits(body.imageInput) : undefined };
 }
 export async function gatewayLimits(config: ReturnType<typeof connectionConfig>) {
   return (await gatewayCapabilities(config)).limits;

@@ -1,6 +1,6 @@
 # Web search
 
-Search web is off by default. Turn it on in the composer for one message to require a web lookup. It resets after sending, when switching conversations, and when switching models. Try again preserves whether that message required search. The user's question is sent to the configured search provider; the UI explains this before sending. Image input and web lookup use separate messages.
+Search web is off by default. Turn it on in the composer for one message to require a web lookup. It resets after sending, when switching conversations. Try again preserves whether that message required search. The user's question is sent to the configured search provider; the UI explains this before sending. Image input and web lookup use separate messages.
 
 Availability is checked through the authenticated `/api/status` endpoint and the selected model/adapter profile. A gateway advertising only ordinary chat remains usable for ordinary messages. Explicit search fails if the gateway cannot verify support or does not return `X-Chat-Web-Search: 1`; it never silently becomes ordinary chat. BF16 needs an exact base/adapter profile capability. No provider key is configured in browser or Next.js public variables.
 
@@ -18,4 +18,4 @@ The proxy's web deadline is the lesser of 240 seconds and the effective request 
 
 Browser storage, cloud history and JSON/Markdown exports retain only bounded citation metadata: version, run ID, terminal outcome, and up to ten source IDs, titles, URLs, retrieval times and evidence kinds. No raw pages, snippets, tool arguments, provider keys or tool traces are saved. User messages retain the small `searchRequested` flag for retries. Follow-up model messages remain the existing text-only history; source registries are not concatenated into prompts or rebound across turns.
 
-Local validation uses unit and route fixtures, a production build, and local PostgreSQL migration checks. These checks do not provision a search provider, apply hosted migrations, deploy services, or prove native tool calling on either live Qwen model. Those operational checks remain necessary before enabling a live profile.
+Local validation uses unit and route fixtures, a production build, and local PostgreSQL migration checks. These checks do not provision a search provider, apply hosted migrations, deploy services, or prove native tool calling on the live BF16 model. Those operational checks remain necessary before enabling a live profile.

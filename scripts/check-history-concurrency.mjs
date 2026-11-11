@@ -19,7 +19,7 @@ async function connect(name, dbName = database) {
 }
 const scalar = async (client, sql, params = []) => (await client.query(sql, params)).rows[0].value;
 const rpc = (client, call, params = []) => scalar(client, `select public.${call} as value`, params);
-const payload = (text = 'Local concurrency fixture') => ({ title: text.slice(0,80), model: '4bit', messages: [{ id: randomUUID(), role: 'user', content: text }] });
+const payload = (text = 'Local concurrency fixture') => ({ title: text.slice(0,80), model: 'bf16', messages: [{ id: randomUUID(), role: 'user', content: text }] });
 const save = (client, id, body = payload(), revision = 0, operation = randomUUID()) => rpc(client, 'save_chat($1,$2,$3,$4,$5)', [id,body,revision,operation,new Date().toISOString()]);
 const usage = client => rpc(client, 'chat_history_usage()');
 const pids = async clients => clients.map(client=>client.qaPid);

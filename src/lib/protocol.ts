@@ -1,7 +1,7 @@
 import { validateSettings, jsonBytes, type ChatSettings } from "./chat-settings";
 import { parseUsage, parseTimingEvent, type GatewayTimingEvent, type TokenUsage } from "./diagnostics";
 import { parseModelId, type ModelId } from "./models";
-import { IMAGE_ADAPTER_ERROR, IMAGE_UNSUPPORTED_ERROR, validateImageInput } from "./image-input";
+import { IMAGE_ADAPTER_ERROR, validateImageInput } from "./image-input";
 import { validateWebSearch, webEventReader, type WebEvent, type WebSearchRequest } from "./web-search";
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 export type ChatInput = { model: ModelId; useAdapter?: boolean; messages: ChatMessage[]; max_tokens: number; temperature: number; settings: ChatSettings; image?: string; webSearch?: WebSearchRequest };
@@ -11,7 +11,7 @@ export function validateInput(value: unknown): ChatInput {
   const data = value as Record<string, unknown>;
   const webSearch = validateWebSearch(data.webSearch);
   const model = parseModelId(data.model);
-  if (data.useAdapter !== undefined && (model !== "bf16" || typeof data.useAdapter !== "boolean"))
+  if (data.useAdapter !== undefined && typeof data.useAdapter !== "boolean")
     throw new Error("Adapter selection must be a boolean for the BF16 model.");
   const useAdapter = data.useAdapter as boolean | undefined;
   if (Object.hasOwn(data, "docsMode") || Object.hasOwn(data, "docsPassages"))
@@ -19,7 +19,6 @@ export function validateInput(value: unknown): ChatInput {
   let image: string | undefined;
   if (data.image !== undefined) {
     if (webSearch) throw new Error("Use web search and image attachments in separate messages.");
-    if (model !== "bf16") throw new Error(IMAGE_UNSUPPORTED_ERROR);
     if (useAdapter === true) throw new Error(IMAGE_ADAPTER_ERROR);
     image = validateImageInput(data.image);
   }

@@ -8,11 +8,11 @@ For admins, Advanced settings includes **Reuse cached prefixes**, on by default 
 
 A personal chat workspace for the existing Qwen model on Runpod. The frontend and server-side API are built with Next.js 16, React 19, and TypeScript, deployed to Vercel with local development support.
 
-Kiddo Chat is the product name; Qwen names identify the underlying models and remain in model selection, settings, diagnostics, and attribution. Browser storage keys retain their existing names to preserve saved conversations and preferences. See [branding rollout](docs/branding-rollout.md) for the coordinated public URL and Google sign-in branding cutover.
+Kiddo Chat is the product name; Qwen names identify the underlying model in the header, settings, diagnostics, and attribution. Browser storage keys retain their existing names. See [branding rollout](docs/branding-rollout.md) for the coordinated public URL and Google sign-in branding cutover.
 
-The frontend can run locally at `http://127.0.0.1:3001`; the hosted production site is `https://qwen38-chat-zh.vercel.app`. Each deployment has its own server environment configuration. It supports selecting **Qwen3.8-27B-4bit** or **Qwen3.8-27B-bf16**, routed to separate authenticated Runpod gateways. The 4bit model remains the default; BF16 requires its own connection variables on the deployment being used.
+The frontend can run locally at `http://127.0.0.1:3001`; the hosted production site is `https://qwen38-chat-zh.vercel.app`. Each deployment has its own server environment configuration. **Qwen3.8-27B-bf16** is the sole supported model and the default, routed to its authenticated Runpod gateway.
 
-## Choose a model
+## BF16 model and adapter
 
 For admins, when the BF16 gateway advertises adapter switching, **Use trained adapter**
 appears under **Your workspace → Qwen3.8-27B-bf16 → Advanced settings**. Their new conversations default to On:
@@ -21,7 +21,7 @@ The choice is saved per conversation; each new assistant answer records its own
 mode and is labeled **BF16 + adapter** or **BF16 base**. Changing the choice does
 not relabel earlier answers. Legacy answers retain their existing model labels
 because their original adapter state cannot be inferred. The control is unavailable
-when BF16 is not selected or its gateway does not support switching, and is disabled while
+when its gateway does not support switching, and is disabled while
 that conversation is generating. Switching an active conversation keeps its history;
 start fresh conversations with the same settings for a controlled comparison.
 
@@ -39,18 +39,17 @@ local app connected to the companion backend's `chat_test_fixture.py` with
 The optional `CHAT_ADAPTER_TEST_BASE` defaults to `http://127.0.0.1:3003` and
 `CHAT_ADAPTER_TEST_COOKIE` must be a verified fixture account session cookie.
 
-The header selector switches the next request between `Qwen3.8-27B-4bit` and
-`Qwen3.8-27B-bf16`. Both Pods remain running; selecting a model does not reload
-weights. Selection is saved with each conversation, and assistant messages retain
-the model that generated them even after a later switch. Old conversations use
-4bit. Switching is disabled while a reply is running; stop the reply first.
+The header displays `Qwen3.8-27B-bf16`. New conversations and requests that omit
+the model ID use BF16. Requests for other model IDs are rejected. Conversations
+with explicit unsupported model metadata are omitted from browser and cloud
+history rather than relabeled. Existing BF16 preferences remain available;
+preferences belonging to a retired model are ignored.
 
 Configure the local frontend's ignored `.env.local` and restart its process:
 
 | Model | Gateway origin | Server-side credential |
 | --- | --- | --- |
-| `4bit` (default) | `RUNPOD_CHAT_URL` | `RUNPOD_CHAT_TOKEN` |
-| `bf16` | `RUNPOD_BF16_CHAT_URL` | `RUNPOD_BF16_CHAT_TOKEN` |
+| `bf16` (default) | `RUNPOD_BF16_CHAT_URL` | `RUNPOD_BF16_CHAT_TOKEN` |
 
 The BF16 gateway origin is `https://o6f2qoctk798tq-8001.proxy.runpod.net`.
 It serves the original BF16 checkpoint on an RTX PRO 6000 with CPU offloading
@@ -61,62 +60,49 @@ the affected frontend after changing its environment. See the backend's
 [migration record](https://github.com/alstomli/llm-inference-server/blob/main/deployments/qwen-bf16/RTX6000-MIGRATION.md)
 for verification, monitoring and rollback. The prior BF16 origin on
 `ftntkktzid9f4p` is retained only for migration rollback.
-The existing 4bit gateway remains
-`https://rp93m3noz3l9lt-8001.proxy.runpod.net`. Use the matching private chat
-credential for each Pod; monitoring credentials are separate. Never use
+Use the matching private BF16 chat credential; monitoring credentials are separate. Never use
 `NEXT_PUBLIC_` for either connection or credential.
 
-Browser requests contain only the allowlisted public ID `4bit` or `bf16`.
-The Next.js server chooses its configured endpoint and token, verifies the
-reported serving alias (`qwen` / `qwen-bf16`), and strips the public selector
-before forwarding. Unknown IDs are rejected; an unavailable BF16 target never
-falls back to 4bit. Credentials and gateway origins are not returned in status.
+Browser requests contain only the allowlisted public ID `bf16`.
+The Next.js server uses its configured BF16 endpoint and token, verifies the
+reported serving alias `qwen-bf16`, and strips the public selector before
+forwarding. Credentials and gateway origins are not returned in status.
 
-Each selection refreshes readiness, diagnostics support, and actual server
-limits before sending. Late responses from a previous selection are discarded.
-Both model profiles initially use the same defaults: 40,960 context tokens,
+Readiness, diagnostics support, and actual server limits are checked before
+sending. Initial defaults are 40,960 context tokens,
 7,680 output tokens, and 32 safety tokens. Actual gateway limits take precedence.
-Advanced preferences are saved separately per model; legacy preferences migrate
-to 4bit. If a smaller context is reported, effective settings leave input space
+Advanced preferences are saved for BF16. If a smaller context is reported, effective settings leave input space
 without overwriting the stored preferences. Exact token fitting and any old
 exchange removal remain the selected gateway's responsibility.
 
-### Settings for both models
+### Model settings
 
-Open **Your workspace** to see both model connections at the top. Each status is
-checked independently; one unavailable or unconfigured model does not hide the
-other model's readiness. **Refresh connections** checks both gateways in parallel.
+Open **Your workspace** to see the BF16 connection at the top.
+**Refresh connection** checks its gateway readiness and capabilities.
 
-Admins can expand either `Qwen3.8-27B-4bit` or `Qwen3.8-27B-bf16` to edit its own
-Advanced settings. Each section has separate fields, Apply, and Reset controls.
-Editing settings does not change the model selected for the conversation. Unsaved
-drafts remain isolated while opening and closing either section; Apply and Reset
-update only that model's browser preferences. Shared initial defaults remain
+Admins can expand `Qwen3.8-27B-bf16` to edit Advanced settings using its
+Apply and Reset controls. Unsaved drafts remain available while opening and
+closing the section. Apply and Reset update BF16 browser preferences. Initial defaults remain
 40,960 context tokens, 7,680 output tokens, and 32 safety tokens. Creativity
-retains its existing shared behavior; diagnostics opt-ins are per model and per
-session.
+retains its existing behavior; diagnostics opt-ins last for the session.
 
 A model with current verified limits is editable. During a temporary outage,
 its own last verified limits remain available in that browser page, clearly
 labeled as such. A never-verified connection stays disabled until its limits
-can be checked; another model's limits are never borrowed. Every chat request
-still verifies the currently selected gateway and actual limits before sending.
+can be checked. Every chat request still verifies the gateway and actual limits before sending.
 
 ### Hosted connection configuration
 
 Local `.env.local` settings do not configure Vercel. Add both BF16 connection
-variables to the intended Vercel environment as server-only values, alongside
-the existing 4bit connection, then redeploy. Configure Production and Preview
+variables to the intended Vercel environment as server-only values, then redeploy. Configure Production and Preview
 separately as needed. A missing `RUNPOD_BF16_CHAT_URL` or
 `RUNPOD_BF16_CHAT_TOKEN` produces **Gateway connection not configured** for BF16;
 it does not mean the BF16 Pod itself is stopped. This was the cause of the
-hosted site's missing BF16 connection while the local frontend could reach both
-Pods. Keep credentials private and never prefix them with `NEXT_PUBLIC_`.
+hosted site's missing BF16 connection. Keep credentials private and never prefix them with `NEXT_PUBLIC_`.
 
 Verification includes `npm test`, `npm run typecheck`, and `npm run build`.
-The model tests use two distinct mock upstreams and credentials; live acceptance
-must separately confirm readiness, a streamed reply from each model, stopping,
-selection persistence, and the selected model's limits.
+The model tests use isolated BF16 mock gateways; live acceptance must separately
+confirm readiness, a streamed BF16 reply, stopping, adapter behavior, and gateway limits.
 
 ## Run locally
 
@@ -141,7 +127,7 @@ npm run setup
 npm run dev
 ```
 
-Supabase Auth and Postgres are required for accounts. No OpenAI account is required. The app is configured for your live Runpod model. For an isolated local preview, clear `RUNPOD_CHAT_URL` and set `CHAT_PREVIEW_MODE=true`; sample replies are clearly labeled and make no model requests. Stop the local server with Ctrl+C.
+Supabase Auth and Postgres are required for accounts. No OpenAI account is required. The app is configured for your live Runpod model. For an isolated local preview, clear `RUNPOD_BF16_CHAT_URL` and set `CHAT_PREVIEW_MODE=true`; sample replies are clearly labeled and make no model requests. Stop the local server with Ctrl+C.
 
 ## Included behavior
 
@@ -159,7 +145,7 @@ The sidebar's **HISTORY** list combines synced and browser-only conversations in
 latest-activity order. Its count includes both; the footer reports the separate
 synced-storage quota. Opening an older local conversation explains its storage scope.
 
-New cloud history stores text, model choices, message status, image filenames,
+New cloud history stores text, model metadata, message status, image filenames,
 and citations, not image files or request diagnostics. Save operations enforce
 ownership, revisions, and quotas in Postgres. An oversized active conversation
 is retained locally instead of being silently truncated. Settings remain local.
@@ -171,9 +157,15 @@ Supabase Free plan; database-size and egress monitoring remain necessary even wi
 the 100-account cap. The [design decision](docs/adr-cloud-history.md) explains the
 storage and retry tradeoffs. Ordinary Git deployments require no generated document index.
 
+Apply `supabase/migrations/202611100002_bf16_only.sql` after the web-search
+metadata migration for BF16-only history writes. It rejects explicit unsupported
+model IDs while preserving account controls and citation metadata. Older migration
+files remain historical records. This source change does not apply hosted SQL,
+remove hosted data, change hosting environment variables, or stop any Pod.
+
 ## Ask about an image
 
-Select **Qwen3.8-27B-bf16** and use **Attach image** to add one JPEG, PNG, or WebP to a text prompt. If **Use trained adapter** is available, open **Your workspace → Qwen3.8-27B-bf16 → Advanced settings** and switch it off to use the BF16 base model for the image request. Qwen streams a text reply through the same chat connection.
+Use **Attach image** to add one JPEG, PNG, or WebP to a text prompt. If **Use trained adapter** is available, open **Your workspace → Qwen3.8-27B-bf16 → Advanced settings** and switch it off to use the BF16 base model for the image request. Qwen streams a text reply through the same chat connection.
 
 The attachment control is available when the connected BF16 gateway advertises image input. The uploaded image shares the request byte budget with the text. The app keeps recent image bytes in the open tab for retry, and the saved conversation retains an attachment marker. Reattach the file to retry after a reload or to ask another question about the same image.
 
@@ -195,10 +187,10 @@ The source for the gateway and its startup integration is in the [llm-inference-
 
 The following settings were applied to the existing Pod; retain them when replacing it:
 
-1. Save a separate chat token of at least 32 characters at `/workspace/chat/chat-token`, readable only by the service owner. The generated `RUNPOD_CHAT_TOKEN` in this app's `.env.local` is prepared for this purpose; do not reuse the monitoring token.
+1. Save a separate chat token of at least 32 characters at `/workspace/chat/chat-token`, readable only by the service owner. Configure the matching `RUNPOD_BF16_CHAT_TOKEN` in this app; do not reuse the monitoring token.
 2. Deploy the new image with the existing network volume. Keep `METRICS_ENABLED=true` and `METRICS_HOST=0.0.0.0`; add `CHAT_ENABLED=true`, `CHAT_HOST=0.0.0.0`, and `CHAT_PORT=8001`. Keep vLLM bound to `127.0.0.1`.
 3. Add HTTP port 8001 to the existing port list, preserving 8888. Keep the current model configuration and persistent caches.
-4. Set this app's `RUNPOD_CHAT_URL` to the gateway's HTTPS origin, without `/v1` or another path. Set the matching `RUNPOD_CHAT_TOKEN`, then restart/redeploy the frontend.
+4. Set this app's `RUNPOD_BF16_CHAT_URL` to the gateway's HTTPS origin, without `/v1` or another path. Set the matching `RUNPOD_BF16_CHAT_TOKEN`, then restart/redeploy the frontend.
 5. Verify authentication failures, streaming, cancellation, Pod restart, and monitoring before relying on the live connection.
 
 The gateway uses vLLM's `/tokenize` endpoint to count the exact chat template, reserves space for the reply plus the configured safety reserve (default 32 tokens), and drops the oldest full exchanges until the request fits the configured context (local default: 40,960 tokens). A single message that cannot fit is rejected. The updated gateway admits up to two active requests and six waiting requests per process, with FIFO promotion among eligible accounts and no batching collection window. Each signed-in account defaults to one active request, one waiting request, and six accepted requests per rolling minute on each Pod. A separate global rolling limit of 20 accepted requests per minute remains. Queue-full and rate-limit responses have distinct messages; accepted requests may still expire while waiting. The launcher defaults to `MAX_NUM_SEQS=2`; an existing Pod override of `1` retains one active request. This requires the companion gateway release and GPU validation; it does not describe an already deployed concurrency change. The composer allows 120,000 characters; the UI retains at most 799 messages within a 580,000-byte serialized history budget. The API and gateway accept request bodies up to 640,000 bytes and output budgets of 128–10,240 tokens (default 7,680). Character and byte limits do not guarantee that a message fits the token budget. Open **Your workspace → Advanced settings**, enter values, and choose **Apply settings**. Preferences and creativity are saved in this browser; **Reset defaults** restores the limit defaults for the current server. Changes affect the next request and do not modify an active reply. The frontend removes oldest full exchanges to satisfy history and complete-request byte budgets; an oversized newest message is rejected. Both backend layers validate settings, and the gateway enforces them even for direct API requests.
@@ -206,7 +198,7 @@ The gateway uses vLLM's `/tokenize` endpoint to count the exact chat template, r
 
 The server resolves the verified Supabase user and `chat_session_active` result once for each chat request, then sends its canonical UUID in private `X-Chat-User-Id`. Client headers/body identity cannot select another account. Base and adapter modes share that Pod's account budget. Account capacity and rate 429 messages are distinct from model-wide limits. Safe rate responses may include validated integer `Retry-After` (1–60 seconds); retries remain manual. The rejected prompt remains in the transcript, recent attachment bytes remain available in the tab, and **Try again** asks you to finish or clear a newer composer draft before retrying. Accepted requests consume quota even if subsequently cancelled or failed; rejections before gateway reservation do not.
 
-Both chat and status fail 503 if gateway health lacks `accountQuotaVersion: 1` or does not set `accountQuotasEnforced: true`. For rollout, first deploy the companion gateway with explicit temporary `CHAT_REQUIRE_USER_ID=false` for old callers, deploy this frontend that sends verified identity, then restart both gateways with `CHAT_REQUIRE_USER_ID=true` (default). Hold frontend traffic activation until strict health and authenticated streaming are verified for both Pods; the fail-closed check can cause temporary 503 between these stages. Compatibility mode bounds all missing identities to one shared legacy account and always rejects malformed identity. Normal rollback keeps strict enforcement with a compatible frontend, or disables chat. An old frontend plus temporary compatibility requires an explicit operator security tradeoff. The account limits are gateway-side startup settings, not browser preferences. See [the trust and deployment decision](docs/adr-account-quotas.md).
+Both chat and status fail 503 if gateway health lacks `accountQuotaVersion: 1` or does not set `accountQuotasEnforced: true`. For rollout, first deploy the companion gateway with explicit temporary `CHAT_REQUIRE_USER_ID=false` for old callers, deploy this frontend that sends verified identity, then restart the BF16 gateway with `CHAT_REQUIRE_USER_ID=true` (default). Hold frontend traffic activation until strict health and authenticated streaming are verified for the BF16 Pod; the fail-closed check can cause temporary 503 between these stages. Compatibility mode bounds all missing identities to one shared legacy account and always rejects malformed identity. Normal rollback keeps strict enforcement with a compatible frontend, or disables chat. An old frontend plus temporary compatibility requires an explicit operator security tradeoff. The account limits are gateway-side startup settings, not browser preferences. See [the trust and deployment decision](docs/adr-account-quotas.md).
 
 The gateway advertises versioned limits through authenticated `/health`, reads actual `max_model_len` from private vLLM `/v1/models`, and rechecks capacity for each generation. Context is capped by both that value and `MAX_MODEL_LEN`. A smaller connected server automatically lowers effective browser budgets. The displayed ranges are deployment ceilings, not values the browser can override: raising ceilings requires updating server configuration/code and redeploying. The timeout ranges from 1 to 2,400 seconds and covers queue wait, tokenization, model prefill, and streaming; the safety reserve ranges from 0 to 4,096 tokens. Output plus reserve must leave space for input.
 
@@ -220,14 +212,12 @@ Import this folder as a Next.js project using a supported Node.js 22+ runtime. A
 | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase publishable key, never secret/service-role key |
-| `RUNPOD_CHAT_URL` | HTTPS origin of the deployed chat gateway |
-| `RUNPOD_CHAT_TOKEN` | Matching separate 4bit chat gateway token |
 | `RUNPOD_BF16_CHAT_URL` | BF16 gateway HTTPS origin |
 | `RUNPOD_BF16_CHAT_TOKEN` | Matching separate BF16 chat gateway token |
 
 Never use `NEXT_PUBLIC_` for secret credentials. Local preview is forcibly disabled in production, even if `CHAT_PREVIEW_MODE=true`; missing gateway configuration returns an honest setup/unavailable response. The chat route declares a 300-second maximum execution time for Vercel Hobby compatibility. This includes validation, waiting for the model, and streaming the reply. The configurable generation timeout can be longer locally, but it does not override Vercel’s execution limit; on Vercel, choose a timeout below 300 seconds. Supabase handles authentication rate limits. Complete the migration, Google OAuth provider, disabled email/password and anonymous sign-in, and callback allowlist configuration in [Account setup](docs/accounts.md) before production cutover.
 
-The hosted frontend uses its configured Vercel environment and is linked to `main`; merging changes there triggers a deployment. The two model engines and authenticated gateways run on their separate Runpod Pods. Updating server-side connection variables requires a new frontend deployment.
+The hosted frontend uses its configured Vercel environment and is linked to `main`; merging changes there triggers a deployment. The BF16 engine and its authenticated gateway run on Runpod. Updating server-side connection variables requires a new frontend deployment.
 
 ## Verification
 

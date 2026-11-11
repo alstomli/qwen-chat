@@ -20,15 +20,15 @@ test("retired retrieval request fields are rejected even when false or empty", (
 
 test("ordinary API streaming ignores obsolete gateway capabilities and strips retrieval headers", async context => {
   const saved = { ...process.env };
-  Object.assign(process.env, { NODE_ENV: "production", RUNPOD_CHAT_URL: "https://gateway.example", RUNPOD_CHAT_TOKEN: "t".repeat(48) });
+  Object.assign(process.env, { NODE_ENV: "production", RUNPOD_BF16_CHAT_URL: "https://gateway.example", RUNPOD_BF16_CHAT_TOKEN: "t".repeat(48) });
   const forwarded: Record<string, unknown>[] = [];
   const stream = 'data: {"choices":[{"delta":{"content":"Ordinary answer"}}]}\n\ndata: [DONE]\n\n';
   context.mock.method(globalThis, "fetch", async (...[input, init]: Parameters<typeof fetch>) => {
     const auth = authResponse(input, init); if (auth) return auth;
-    if (String(input).endsWith("/health")) return Response.json({ ready: true, model: "qwen", settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true, limits: SETTINGS_MAX,
+    if (String(input).endsWith("/health")) return Response.json({ ready: true, model: "qwen-bf16", settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true, adapterToggleVersion: 1, adapterToggleAvailable: true, limits: SETTINGS_MAX,
       docsModeVersion: 1, docsModeAvailable: true, docsModeUnavailable: "index" });
     forwarded.push(JSON.parse(String(init?.body)));
-    return new Response(stream, { headers: { "X-Chat-Docs-Mode": "1", "X-Chat-Docs-Sources": encodeURIComponent(JSON.stringify(sources)) } });
+    return new Response(stream, { headers: { "X-Chat-Adapter-Enabled": "false", "X-Chat-Docs-Mode": "1", "X-Chat-Docs-Sources": encodeURIComponent(JSON.stringify(sources)) } });
   });
   const headers = { Origin: "https://chat.example", Cookie: cookieHeader(issueSession()).split(";")[0], "Content-Type": "application/json" };
   const post = (extra = {}) => POST(new Request("https://chat.example/api/chat", { method: "POST", headers, body: JSON.stringify({ messages, ...extra }) }));

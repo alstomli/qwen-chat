@@ -18,7 +18,7 @@ test("adapter preference and answer labels persist independently without relabel
   chats[0].useAdapter = true;
   assert.equal(chats[0].messages[2].useAdapter, false);
   const switched = parseConversations(JSON.stringify([{ ...chats[0], model: "4bit", useAdapter: false }]));
-  assert.equal(switched[0].useAdapter, false);
+  assert.deepEqual(switched, []);
 });
 
 test("adapter input accepts only explicit BF16 booleans and participates in byte fitting", () => {
