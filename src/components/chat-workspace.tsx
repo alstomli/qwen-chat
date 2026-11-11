@@ -5,10 +5,13 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { RequestDiagnostics, exportDiagnostics } from "@/components/request-diagnostics";
 import { DIAGNOSTICS_HEADER, parseDiagnosticHeader, type BrowserTimings, type DiagnosticRecord } from "@/lib/diagnostics";
+import { ImageReferencePreview } from "@/components/image-reference-preview";
 import { ImageJobCard } from "@/components/image-job-card";
 import { useImageJobs } from "@/lib/use-image-jobs";
+import { loadImage } from "@/lib/image-store";
+import { prepareImageReference, type ImageReference } from "@/lib/image-reference";
 import { ownsImageRequest, rememberImageRequest } from "@/lib/image-origin";
-import { imagePending, type GeneratedImage } from "@/lib/generated-image";
+import { mayStartImageRequest, type GeneratedImage } from "@/lib/generated-image";
 import { AnswerPaint } from "@/components/answer-paint";
 import { ModelSettingsPanel } from "@/components/model-settings-panel";
 import { citationPlugin, WebSources } from "@/components/web-sources";
@@ -38,7 +41,12 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   const [authenticated, setAuthenticated] = useState(true);
   const [imageMode, setImageMode] = useState(false);
   const [imageDraft, setImageDraft] = useState("");
-  const imageDrafts = useRef(new Map<string | null, string>());
+  const [imageReference, setImageReference] = useState<ImageReference | null>(null);
+  const [referenceSource, setReferenceSource] = useState<string | null>(null);
+  const [preparingReference, setPreparingReference] = useState(false);
+  const referenceController = useRef<AbortController | null>(null);
+  const imageDrafts = useRef(new Map<string | null, { text: string; reference: ImageReference | null; source: string | null }>());
+  useEffect(() => () => { referenceController.current?.abort(); imageDrafts.current.clear(); }, [userId]);
   const storageKey = accountStorageKey(STORAGE_KEY, userId);
   const settingsKey = accountStorageKey(SETTINGS_KEY, userId);
   const modelSettingsKey = accountStorageKey(MODEL_SETTINGS_KEY, userId);
@@ -170,9 +178,11 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
     setReadingImage(false); setAttachment(null);
   }
   function switchConversation(id: string | null) {
-    if (readingImage) { setToast("Wait for the image to finish preparing before switching conversations."); return false; }
+    if (readingImage || preparingReference) { setToast("Wait for the image to finish preparing before switching conversations."); return false; }
     if (id !== activeId) {
-      imageDrafts.current.set(activeId, imageDraft); setImageDraft(imageDrafts.current.get(id) ?? "");
+      imageDrafts.current.set(activeId, { text: imageDraft, reference: imageReference, source: referenceSource });
+      const imagePendingDraft = imageDrafts.current.get(id);
+      setImageDraft(imagePendingDraft?.text ?? ""); setImageReference(imagePendingDraft?.reference ?? null); setReferenceSource(imagePendingDraft?.source ?? null);
       if (attachment || retryImageId) savedDrafts.current.set(activeId, { text: draft, attachment, retryId: retryImageId });
       const pending = savedDrafts.current.get(id);
       savedDrafts.current.delete(id);
@@ -191,7 +201,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   }
   function newChat() {
     if (!switchConversation(null)) return;
-    if (activeId === null && !attachment && !retryImageId) clearDraft();
+    if (activeId === null && !attachment && !retryImageId) { clearDraft(); setImageDraft(""); setImageReference(null); setReferenceSource(null); }
     setDraftAdapter(true); textarea.current?.focus();
   }
   async function chooseImage(file: File) {
@@ -336,17 +346,33 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
       });
     }
   }
-  function generateImage(prompt = imageDraft) {
+  async function beginImageEdit(sourceImageId: string | undefined, instruction = "") {
+    if (!authenticated || !canUseAdvancedSettings || !imageJobs.editingAvailable) { setToast("Reference editing is unavailable until the image service is ready."); return; }
+    referenceController.current?.abort();
+    const controller = new AbortController(); referenceController.current = controller;
+    setImageMode(true); setImageDraft(instruction); setImageReference(null); setReferenceSource(sourceImageId ?? ""); setPreparingReference(true);
+    try {
+      const blob = sourceImageId ? await loadImage(userId, sourceImageId) : undefined;
+      controller.signal.throwIfAborted();
+      if (!blob) throw new Error("The original reference image isn't saved on this browser. Open the browser that created it.");
+      const prepared = await prepareImageReference(blob, sourceImageId!, controller.signal);
+      if (!controller.signal.aborted) { setImageReference(prepared); textarea.current?.focus(); }
+    } catch (error) { if (!controller.signal.aborted) setToast(error instanceof Error ? error.message : "The reference could not be loaded."); }
+    finally { if (referenceController.current === controller) { referenceController.current = null; setPreparingReference(false); } }
+  }
+  function clearImageReference() { referenceController.current?.abort(); referenceController.current = null; setPreparingReference(false); setImageReference(null); setReferenceSource(null); textarea.current?.focus(); }
+  function generateImage(prompt = imageDraft, reference = imageReference, requireReference = referenceSource !== null) {
     prompt = prompt.trim();
-    if (!canUseAdvancedSettings || !imageJobs.available || !prompt || prompt.length > 2000) return;
+    if (!canUseAdvancedSettings || !imageJobs.available || !prompt || prompt.length > 2000 || preparingReference) return;
+    if (requireReference && (!reference || !imageJobs.editingAvailable)) { setToast("Load the original saved reference before submitting this edit."); return; }
     if (activeId && cloud?.entries.get(activeId)?.loaded === false) { setToast("Load this conversation first."); return; }
-    if (chats.some(chat => chat.messages.some(message => message.generatedImage && ownsImageRequest(userId, message.generatedImage.requestId) && imagePending(message.generatedImage)))) { setToast("Your account already has an image in progress. Wait for it or cancel it first."); return; }
+    if (!mayStartImageRequest(chats.flatMap(chat => chat.messages.flatMap(message => message.generatedImage && ownsImageRequest(userId, message.generatedImage.requestId) ? [message.generatedImage] : [])), imageJobs.hasTrackingRequests())) { setToast("Your account already has an image in progress. Wait for it or cancel it first."); return; }
     const id = activeId ?? uid(); const messageId = uid();
     try { rememberImageRequest(userId, messageId); } catch (error) { setToast(error instanceof Error ? error.message : "Browser storage is unavailable."); return; }
-    const generatedImage: GeneratedImage = { version: 1, prompt, requestId: messageId, status: "submitting" };
+    const generatedImage: GeneratedImage = { version: 1, prompt, requestId: messageId, status: "submitting", ...(requireReference && reference ? { mode: "edit", sourceImageId: reference.sourceImageId } : {}) };
     setChats(current => [{ id, model: selectedModel, title: active?.title ?? prompt.slice(0, 48), updatedAt: Date.now(), messages: [...(current.find(chat => chat.id === id)?.messages ?? []), { id: messageId, role: "assistant", content: "", state: "complete", generatedImage }] }, ...current.filter(chat => chat.id !== id)]);
-    setActiveId(id); setImageDraft(""); imageDrafts.current.delete(activeId); follow.current = true;
-    void imageJobs.track(id, messageId, generatedImage, true);
+    setActiveId(id); setImageDraft(""); setImageReference(null); setReferenceSource(null); imageDrafts.current.delete(activeId); follow.current = true;
+    void imageJobs.track(id, messageId, generatedImage, true, requireReference ? reference?.dataUrl : undefined);
   }
   function retry() {
     const message = messages.findLast(m => m.role === "user");
@@ -360,6 +386,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
     void send(message.content, message.id, image ?? null, message.searchRequested === true);
   }
   function deleteConversation() {
+    imageDrafts.current.delete(deleting);
     const removed = chats.find(chat => chat.id === deleting); if (removed) imageJobs.cleanup(removed);
     if (deleting && !legacyIds.current.has(deleting)) void cloud?.remove(deleting);
     if (deleting) controllers.current.get(deleting)?.abort();
@@ -368,7 +395,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
       if (image.chatId === deleting) sentImages.current.delete(messageId);
     }
     savedDrafts.current.delete(deleting);
-    if (activeId === deleting) { setActiveId(null); clearDraft(); }
+    if (activeId === deleting) { referenceController.current?.abort(); referenceController.current = null; setPreparingReference(false); setImageReference(null); setReferenceSource(null); setImageDraft(""); setActiveId(null); clearDraft(); }
     setDeleting(null);
   }
   async function logout() {
@@ -387,7 +414,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   useEffect(() => {
     if (authenticated) return;
     for (const request of controllers.current.values()) request.abort();
-    sentImages.current.clear(); savedDrafts.current.clear(); imageRead.current++;
+    sentImages.current.clear(); savedDrafts.current.clear(); imageDrafts.current.clear(); referenceController.current?.abort(); referenceController.current = null; setImageReference(null); setReferenceSource(null); imageRead.current++;
     setChats([]); setLoaded(false); setDraft(""); setAttachment(null); setDiagnosticRecords([]);
     window.location.replace("/sign-in");
   }, [authenticated]);
@@ -450,11 +477,11 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
       <main className={`chat-main ${messages.length ? "has-messages" : ""}`} ref={scroller} onScroll={() => { const el = scroller.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>
         {historyLoading !== null && historyLoading === activeId ? <p className="history-loading" role="status">Loading conversation…</p> : activeId && activeEntry?.loaded === false ? <div className="history-loading"><p>Load this conversation to read or continue it.</p><button className="secondary-button" onClick={() => switchConversation(activeId)}>Try loading again</button></div> : !messages.length ? <div className="welcome"><div className="welcome-mark" aria-hidden="true"><span>✳</span><i/></div><div className="eyebrow">A FRESH CONVERSATION</div><h1>A little curiosity.<br/><em>A lot of possibility.</em></h1><p>Your space to think, write, and work things out.</p><div className="starter-grid">{starters.map(card => <button className="starter-card" key={card.label} onClick={() => { setDraft(card.text); textarea.current?.focus(); }}><div><card.icon size={20} strokeWidth={1.45}/><ArrowUpRight size={16}/></div><strong>{card.label}</strong><small>{card.caption}</small></button>)}</div></div>
         : <div className="message-list">
-          {messages.map((message, index) => message.generatedImage ? <ImageJobCard key={message.id} userId={userId} id={message.id} image={message.generatedImage} note={imageJobs.notes[message.id]} allowed={canUseAdvancedSettings}
+          {messages.map((message, index) => message.generatedImage ? <ImageJobCard key={message.id} userId={userId} id={message.id} image={message.generatedImage} note={imageJobs.notes[message.id]} allowed={canUseAdvancedSettings} editingAvailable={imageJobs.editingAvailable} onEditImage={() => { void beginImageEdit(message.id); }}
             onCheck={() => { if (activeId) void imageJobs.track(activeId, message.id, message.generatedImage!, true); }}
             onCancel={() => { if (activeId) void imageJobs.cancel(activeId, message.id, message.generatedImage!); }}
-            onEdit={() => { setImageMode(true); setImageDraft(message.generatedImage!.prompt); textarea.current?.focus(); }}
-            onGenerate={() => generateImage(message.generatedImage!.prompt)}/> : <article className={`message ${message.role}`} key={message.id}>
+            onEdit={() => { if (message.generatedImage!.mode === "edit") void beginImageEdit(message.generatedImage!.sourceImageId, message.generatedImage!.prompt); else { setImageMode(true); setImageReference(null); setReferenceSource(null); setImageDraft(message.generatedImage!.prompt); textarea.current?.focus(); } }}
+            onGenerate={() => { if (message.generatedImage!.mode === "edit") void beginImageEdit(message.generatedImage!.sourceImageId, message.generatedImage!.prompt); else generateImage(message.generatedImage!.prompt, null, false); }}/> : <article className={`message ${message.role}`} key={message.id}>
             <div className="message-avatar">{message.role === "assistant" ? logo : "Z"}</div>
             <div className="message-body">
               <div className="message-author">{message.role === "user" ? "You" : answerModelLabel(message.model ?? DEFAULT_MODEL, message.useAdapter)}{message.role === "assistant" && <span>ASSISTANT</span>}</div>
@@ -481,14 +508,15 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
         {!imageMode && connection.mode === "live" && !connection.ready && <div className="offline-note">Your model may be stopped or loading. You can try again when it’s ready.</div>}
         <form className="composer" onSubmit={e => { e.preventDefault(); if (imageMode) generateImage(); else void send(); }}>
           {canUseAdvancedSettings && <div className="composer-modes" role="group" aria-label="Composer mode"><button type="button" aria-pressed={!imageMode} onClick={() => setImageMode(false)}>Chat</button><button type="button" aria-pressed={imageMode} onClick={() => setImageMode(true)}>Create image</button></div>}
-          {imageMode && <div className="image-mode-info"><strong>FLUX.2 dev · 1024 × 1024 PNG</strong><p>Describe a new image. Only this prompt is used; chat history and attachments are excluded. The service creates one image at a time, with no waiting queue.</p>{!imageJobs.available && <p role="status">{imageJobs.reason} <button type="button" onClick={() => { void imageJobs.refresh(); }}>Check again</button></p>}</div>}
+          {imageMode && <div className="image-mode-info"><strong>FLUX.2 dev · {referenceSource !== null ? "Reference edit" : "1024 × 1024 PNG"}</strong><p>{referenceSource !== null ? "Describe what to change in the reference image. Your instruction and this image are sent to FLUX." : "Describe a new image. Only this prompt is used; chat history and attachments are excluded."} The service creates one image at a time, with no waiting queue.</p>{!imageJobs.available && <p role="status">{imageJobs.reason} <button type="button" onClick={() => { void imageJobs.refresh(); }}>Check again</button></p>}</div>}
+          {imageMode && referenceSource !== null && <ImageReferencePreview reference={imageReference} preparing={preparingReference} onRemove={clearImageReference}/>}
           {!imageMode && attachment && <div className="composer-attachment">
             <img src={attachment.dataUrl} alt="Image preview"/>
             <span title={attachment.name}>{attachment.name}</span>
             <button type="button" aria-label="Remove image" onClick={() => { removeAttachment(); textarea.current?.focus(); }}><X size={16} aria-hidden="true"/></button>
           </div>}
-          <label className="sr-only" htmlFor="message">{imageMode ? "Describe your image" : "Message Kiddo"}</label>
-          <textarea ref={textarea} id="message" placeholder={imageMode ? "Describe the image you want to create…" : "What’s on your mind?"} value={imageMode ? imageDraft : draft} onChange={e => imageMode ? setImageDraft(e.target.value) : setDraft(e.target.value)}
+          <label className="sr-only" htmlFor="message">{imageMode ? referenceSource !== null ? "Describe the changes to your reference image" : "Describe your image" : "Message Kiddo"}</label>
+          <textarea ref={textarea} id="message" placeholder={imageMode ? referenceSource !== null ? "What would you like to change in this image?" : "Describe the image you want to create…" : "What’s on your mind?"} value={imageMode ? imageDraft : draft} onChange={e => imageMode ? setImageDraft(e.target.value) : setDraft(e.target.value)}
             maxLength={imageMode ? 2000 : effectiveSettings.inputCharacters} rows={1} onKeyDown={e => {
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
@@ -511,7 +539,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
                 disabled={!!attachmentUnavailable || !!busy || readingImage} onClick={() => fileInput.current?.click()}>
                 <ImagePlus size={17} aria-hidden="true"/>
               </button></>}
-              {imageMode ? <button className="send-button" aria-label="Generate image" disabled={!imageDraft.trim() || !imageJobs.available || activeEntry?.loaded === false}><ImagePlus size={20}/></button> : busy ? <button type="button" className="send-button stop-button" aria-label="Stop generation" onClick={() => { if (activeId) controllers.current.get(activeId)?.abort(); textarea.current?.focus(); }}><Square size={15} fill="currentColor"/></button>
+              {imageMode ? <button className="send-button" aria-label={referenceSource !== null ? "Apply image edit" : "Generate image"} disabled={!imageDraft.trim() || !imageJobs.available || preparingReference || (referenceSource !== null && (!imageReference || !imageJobs.editingAvailable)) || activeEntry?.loaded === false}><ImagePlus size={20}/></button> : busy ? <button type="button" className="send-button stop-button" aria-label="Stop generation" onClick={() => { if (activeId) controllers.current.get(activeId)?.abort(); textarea.current?.focus(); }}><Square size={15} fill="currentColor"/></button>
                 : <button className="send-button" aria-label="Send message" disabled={!draft.trim() || readingImage || activeEntry?.loaded === false || (searchWeb && !!webUnavailable) || (!!attachment && !!attachmentUnavailable) || (!!retryImageId && !attachment)}><ArrowUp size={20}/></button>}
             </div>
           </div>
