@@ -1,5 +1,14 @@
 -- Generated image metadata only. Image bytes remain in account-scoped browser storage.
 begin;
+-- PL/pgSQL resolves called functions at execution time. Fail before replacing the
+-- working history cleaner if an earlier migration was omitted from this database.
+do $$
+begin
+  if pg_catalog.to_regprocedure('public.clean_web_search_metadata(jsonb)') is null then
+    raise exception 'Generated image history requires public.clean_web_search_metadata(jsonb). Apply migration 202611100001_web_search_metadata.sql before this migration.';
+  end if;
+end;
+$$;
 create or replace function public.clean_chat_payload(p jsonb) returns jsonb language plpgsql immutable set search_path = '' as $$
 declare m jsonb; source jsonb; sources jsonb; web jsonb; image jsonb; messages jsonb := '[]'; clean jsonb;
 begin
