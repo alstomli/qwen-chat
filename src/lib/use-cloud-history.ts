@@ -44,7 +44,8 @@ export function useCloudHistory(userId: string, authenticated: boolean, loaded: 
       const previous = checkpoints.current.get(chat.id);
       if (previous?.chat === chat) continue;
       const last = chat.messages.at(-1);
-      const marker = `${chat.messages.length}:${last?.id}:${last?.state ?? "streaming"}:${chat.model}:${chat.useAdapter}`;
+      const imagesMarker = chat.messages.filter(message => message.generatedImage).map(message => `${message.id}:${JSON.stringify(message.generatedImage)}`).join("|");
+      const marker = `${imagesMarker}:${chat.messages.length}:${last?.id}:${last?.state ?? "streaming"}:${chat.model}:${chat.useAdapter}`;
       checkpoints.current.set(chat.id, { chat, marker });
       // Streaming changes only the unfinished assistant's content. Serialize at prompt/terminal checkpoints.
       if (previous?.marker === marker) continue;

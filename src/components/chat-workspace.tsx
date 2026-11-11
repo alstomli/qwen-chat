@@ -5,6 +5,9 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { RequestDiagnostics, exportDiagnostics } from "@/components/request-diagnostics";
 import { DIAGNOSTICS_HEADER, parseDiagnosticHeader, type BrowserTimings, type DiagnosticRecord } from "@/lib/diagnostics";
+import { ImageJobCard } from "@/components/image-job-card";
+import { useImageJobs } from "@/lib/use-image-jobs";
+import { imagePending, type GeneratedImage } from "@/lib/generated-image";
 import { AnswerPaint } from "@/components/answer-paint";
 import { ModelSettingsPanel } from "@/components/model-settings-panel";
 import { citationPlugin, WebSources } from "@/components/web-sources";
@@ -32,10 +35,14 @@ const logo = <span className="qwen-symbol" aria-hidden="true">✳</span>;
 
 export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }: { userId: string; email: string; canUseAdvancedSettings: boolean }) {
   const [authenticated, setAuthenticated] = useState(true);
+  const [imageMode, setImageMode] = useState(false);
+  const [imageDraft, setImageDraft] = useState("");
+  const imageDrafts = useRef(new Map<string | null, string>());
   const storageKey = accountStorageKey(STORAGE_KEY, userId);
   const settingsKey = accountStorageKey(SETTINGS_KEY, userId);
   const modelSettingsKey = accountStorageKey(MODEL_SETTINGS_KEY, userId);
   const [chats, setChats] = useState<Conversation[]>([]); const [loaded, setLoaded] = useState(false);
+  const imageJobs = useImageJobs(userId, authenticated && canUseAdvancedSettings, chats, setChats);
   const legacyIds = useRef(new Set<string>());
   const legacySnapshot = useRef<Conversation[] | null>(null);
   const [legacyDurable, setLegacyDurable] = useState(true);
@@ -164,6 +171,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   function switchConversation(id: string | null) {
     if (readingImage) { setToast("Wait for the image to finish preparing before switching conversations."); return false; }
     if (id !== activeId) {
+      imageDrafts.current.set(activeId, imageDraft); setImageDraft(imageDrafts.current.get(id) ?? "");
       if (attachment || retryImageId) savedDrafts.current.set(activeId, { text: draft, attachment, retryId: retryImageId });
       const pending = savedDrafts.current.get(id);
       savedDrafts.current.delete(id);
@@ -233,7 +241,8 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
     }
     const history = retryIndex < 0 ? messages : messages.slice(0, retryIndex);
     const id = activeId ?? uid(); const responseId = uid(); const userId = uid();
-    const pending: Message[] = [...history, { id: userId, role: "user", content: text, imageName: image?.name, searchRequested: searchRequested ? true : undefined }, { id: responseId, role: "assistant", content: "", model: selectedModel, useAdapter }];
+    const retainedImages = retryIndex < 0 ? [] : messages.slice(retryIndex).filter(message => message.generatedImage);
+    const pending: Message[] = [...history, ...retainedImages, { id: userId, role: "user", content: text, imageName: image?.name, searchRequested: searchRequested ? true : undefined }, { id: responseId, role: "assistant", content: "", model: selectedModel, useAdapter }];
     const candidates = [...completedHistory(history), { role: "user", content: text }];
     let input;
     try { input = fitMessages(candidates, effectiveSettings, temperature, selectedModel, useAdapter, image?.dataUrl); }
@@ -326,6 +335,16 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
       });
     }
   }
+  function generateImage(prompt = imageDraft) {
+    prompt = prompt.trim();
+    if (!canUseAdvancedSettings || !imageJobs.available || !prompt || prompt.length > 2000) return;
+    if (activeId && cloud?.entries.get(activeId)?.loaded === false) { setToast("Load this conversation first."); return; }
+    if (chats.some(chat => chat.messages.some(message => message.generatedImage && imagePending(message.generatedImage)))) { setToast("Your account already has an image in progress. Wait for it or cancel it first."); return; }
+    const id = activeId ?? uid(); const messageId = uid();
+    const generatedImage: GeneratedImage = { version: 1, prompt, requestId: messageId, status: "submitting" };
+    setChats(current => [{ id, model: selectedModel, title: active?.title ?? prompt.slice(0, 48), updatedAt: Date.now(), messages: [...(current.find(chat => chat.id === id)?.messages ?? []), { id: messageId, role: "assistant", content: "", state: "complete", generatedImage }] }, ...current.filter(chat => chat.id !== id)]);
+    setActiveId(id); setImageDraft(""); imageDrafts.current.delete(activeId); follow.current = true;
+  }
   function retry() {
     const message = messages.findLast(m => m.role === "user");
     if (!message) return;
@@ -338,6 +357,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
     void send(message.content, message.id, image ?? null, message.searchRequested === true);
   }
   function deleteConversation() {
+    const removed = chats.find(chat => chat.id === deleting); if (removed) imageJobs.cleanup(removed);
     if (deleting && !legacyIds.current.has(deleting)) void cloud?.remove(deleting);
     if (deleting) controllers.current.get(deleting)?.abort();
     setChats(prev => prev.filter(c => c.id !== deleting));
@@ -415,7 +435,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
       <button className="new-chat" onClick={newChat}><Plus size={17}/> New conversation <span>↗</span></button>
       <div className="search-chats"><Search size={15}/><input ref={searchInput} aria-label="Search conversations" placeholder="Search conversations" value={search} onChange={e => setSearch(e.target.value)}/><kbd>⌘ K</kbd></div>
       <div className="history-heading">HISTORY<span>{chats.length}</span></div>
-      <div className="history-list">{historyNotice && <div className="history-notice"><p>New chats sync across devices. Cloud history keeps up to 50 chats or 2 MB. When full, chats with the oldest last message are removed, except the chat being saved. Images aren’t saved.</p><button onClick={dismissHistoryNotice}>Got it</button></div>}
+      <div className="history-list">{historyNotice && <div className="history-notice"><p>New chats sync across devices. Cloud history keeps up to 50 chats or 2 MB. When full, chats with the oldest last message are removed, except the chat being saved. Generated image files stay on the browser that created them; prompts and job details sync.</p><button onClick={dismissHistoryNotice}>Got it</button></div>}
       {visibleChats.map(historyRow)}
         {!chats.length && <div className="empty-history"><MessageSquare size={23} strokeWidth={1.3}/><p>Good conversations<br/>start with a little curiosity.</p><span>Your chats will appear here.</span></div>}{chats.length > 0 && !visibleChats.length && <p className="no-results">No conversations found.</p>}</div>
       <div className="sidebar-bottom"><div className="history-sync"><div className="private-note"><ShieldCheck size={15}/><span>Cloud history · {cloud?.usage.count ?? 0} / 50 chats</span></div><p>{cloud?.offline ? "Last known usage · " : ""}{((cloud?.usage.bytes ?? 0) / 1_000_000).toFixed(2)} MB / 2 MB <span className="sr-only">({cloud?.usage.bytes ?? 0} of 2,000,000 UTF-8 bytes)</span></p><p role="status">{saveLabel}</p>{hasPending && <button onClick={() => { void cloud?.retry(); }}>Retry sync</button>}{cloud?.offline && !hasPending && <button onClick={() => { void cloud.refresh(); }}>Retry loading history</button>}</div><button className="profile-button" onClick={() => setSettings(true)}><span className="avatar">{email[0]?.toUpperCase()}</span><span><strong>Your workspace</strong><small>{email}</small></span><Settings2 size={17}/></button></div>
@@ -427,7 +447,11 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
       <main className={`chat-main ${messages.length ? "has-messages" : ""}`} ref={scroller} onScroll={() => { const el = scroller.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>
         {historyLoading !== null && historyLoading === activeId ? <p className="history-loading" role="status">Loading conversation…</p> : activeId && activeEntry?.loaded === false ? <div className="history-loading"><p>Load this conversation to read or continue it.</p><button className="secondary-button" onClick={() => switchConversation(activeId)}>Try loading again</button></div> : !messages.length ? <div className="welcome"><div className="welcome-mark" aria-hidden="true"><span>✳</span><i/></div><div className="eyebrow">A FRESH CONVERSATION</div><h1>A little curiosity.<br/><em>A lot of possibility.</em></h1><p>Your space to think, write, and work things out.</p><div className="starter-grid">{starters.map(card => <button className="starter-card" key={card.label} onClick={() => { setDraft(card.text); textarea.current?.focus(); }}><div><card.icon size={20} strokeWidth={1.45}/><ArrowUpRight size={16}/></div><strong>{card.label}</strong><small>{card.caption}</small></button>)}</div></div>
         : <div className="message-list">
-          {messages.map((message, index) => <article className={`message ${message.role}`} key={message.id}>
+          {messages.map((message, index) => message.generatedImage ? <ImageJobCard key={message.id} userId={userId} id={message.id} image={message.generatedImage} note={imageJobs.notes[message.id]} allowed={canUseAdvancedSettings}
+            onCheck={() => { if (activeId) void imageJobs.track(activeId, message.id, message.generatedImage!); }}
+            onCancel={() => { if (activeId) void imageJobs.cancel(activeId, message.id, message.generatedImage!); }}
+            onEdit={() => { setImageMode(true); setImageDraft(message.generatedImage!.prompt); textarea.current?.focus(); }}
+            onGenerate={() => generateImage(message.generatedImage!.prompt)}/> : <article className={`message ${message.role}`} key={message.id}>
             <div className="message-avatar">{message.role === "assistant" ? logo : "Z"}</div>
             <div className="message-body">
               <div className="message-author">{message.role === "user" ? "You" : answerModelLabel(message.model ?? DEFAULT_MODEL, message.useAdapter)}{message.role === "assistant" && <span>ASSISTANT</span>}</div>
@@ -450,20 +474,22 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
         </div>}
       </main>
       <div className="composer-region"><div className="composer-wrap">
-        {preview && <div className="preview-note"><Sparkles size={13}/> Local preview · sample replies, no model requests</div>}
-        {connection.mode === "live" && !connection.ready && <div className="offline-note">Your model may be stopped or loading. You can try again when it’s ready.</div>}
-        <form className="composer" onSubmit={e => { e.preventDefault(); void send(); }}>
-          {attachment && <div className="composer-attachment">
+        {!imageMode && preview && <div className="preview-note"><Sparkles size={13}/> Local preview · sample replies, no model requests</div>}
+        {!imageMode && connection.mode === "live" && !connection.ready && <div className="offline-note">Your model may be stopped or loading. You can try again when it’s ready.</div>}
+        <form className="composer" onSubmit={e => { e.preventDefault(); if (imageMode) generateImage(); else void send(); }}>
+          {canUseAdvancedSettings && <div className="composer-modes" role="group" aria-label="Composer mode"><button type="button" aria-pressed={!imageMode} onClick={() => setImageMode(false)}>Chat</button><button type="button" aria-pressed={imageMode} onClick={() => setImageMode(true)}>Create image</button></div>}
+          {imageMode && <div className="image-mode-info"><strong>FLUX.2 dev · 1024 × 1024 PNG</strong><p>Describe a new image. Only this prompt is used; chat history and attachments are excluded.</p>{!imageJobs.available && <p role="status">{imageJobs.reason} <button type="button" onClick={() => { void imageJobs.refresh(); }}>Check again</button></p>}</div>}
+          {!imageMode && attachment && <div className="composer-attachment">
             <img src={attachment.dataUrl} alt="Image preview"/>
             <span title={attachment.name}>{attachment.name}</span>
             <button type="button" aria-label="Remove image" onClick={() => { removeAttachment(); textarea.current?.focus(); }}><X size={16} aria-hidden="true"/></button>
           </div>}
-          <label className="sr-only" htmlFor="message">Message Kiddo</label>
-          <textarea ref={textarea} id="message" placeholder="What’s on your mind?" value={draft} onChange={e => setDraft(e.target.value)}
-            maxLength={effectiveSettings.inputCharacters} rows={1} onKeyDown={e => {
+          <label className="sr-only" htmlFor="message">{imageMode ? "Describe your image" : "Message Kiddo"}</label>
+          <textarea ref={textarea} id="message" placeholder={imageMode ? "Describe the image you want to create…" : "What’s on your mind?"} value={imageMode ? imageDraft : draft} onChange={e => imageMode ? setImageDraft(e.target.value) : setDraft(e.target.value)}
+            maxLength={imageMode ? 2000 : effectiveSettings.inputCharacters} rows={1} onKeyDown={e => {
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
-                if (!e.repeat) void send();
+                if (!e.repeat) { if (imageMode) generateImage(); else void send(); }
               }
             }}/>
           <input ref={fileInput} type="file" aria-label="Choose image file" accept={imageInput?.mimeTypes.join(",") ?? "image/jpeg,image/png,image/webp"}
@@ -473,27 +499,27 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
               if (file) void chooseImage(file);
             }}/>
           <div className="composer-bottom">
-            <span className="composer-model">{logo} {selectedLabel}</span>
+            <span className="composer-model">{logo} {imageMode ? "FLUX.2 dev" : selectedLabel}</span>
             <div className="composer-controls">
               <span className="enter-hint">Shift + Enter for a new line</span>
-              <button type="button" className="web-search-toggle" aria-pressed={searchWeb} aria-describedby="web-search-help"
+              {!imageMode && <><button type="button" className="web-search-toggle" aria-pressed={searchWeb} aria-describedby="web-search-help"
                 disabled={!!busy || (!searchWeb && !!webUnavailable)} onClick={() => setSearchWeb(value => !value)}><Search size={15} aria-hidden="true"/><span>Search web</span></button>
               <button type="button" className="attach-image-button" aria-label="Attach image" aria-describedby="image-input-help"
                 disabled={!!attachmentUnavailable || !!busy || readingImage} onClick={() => fileInput.current?.click()}>
                 <ImagePlus size={17} aria-hidden="true"/>
-              </button>
-              {busy ? <button type="button" className="send-button stop-button" aria-label="Stop generation" onClick={() => { if (activeId) controllers.current.get(activeId)?.abort(); textarea.current?.focus(); }}><Square size={15} fill="currentColor"/></button>
+              </button></>}
+              {imageMode ? <button className="send-button" aria-label="Generate image" disabled={!imageDraft.trim() || !imageJobs.available || activeEntry?.loaded === false}><ImagePlus size={20}/></button> : busy ? <button type="button" className="send-button stop-button" aria-label="Stop generation" onClick={() => { if (activeId) controllers.current.get(activeId)?.abort(); textarea.current?.focus(); }}><Square size={15} fill="currentColor"/></button>
                 : <button className="send-button" aria-label="Send message" disabled={!draft.trim() || readingImage || activeEntry?.loaded === false || (searchWeb && !!webUnavailable) || (!!attachment && !!attachmentUnavailable) || (!!retryImageId && !attachment)}><ArrowUp size={20}/></button>}
             </div>
           </div>
-          <p className="web-search-help" id="web-search-help">{webUnavailable || (searchWeb ? "Search required for this message. Your question is sent to a web search provider." : "Search web is off. Turn it on to look up current sources.")}</p>
+          {!imageMode && <><p className="web-search-help" id="web-search-help">{webUnavailable || (searchWeb ? "Search required for this message. Your question is sent to a web search provider." : "Search web is off. Turn it on to look up current sources.")}</p>
           <div className="composer-attachment-note" id="image-input-help" aria-live="polite">
             {readingImage ? "Preparing image…" : retryImageId && !attachment ? "Reattach the original image to retry this message." : attachmentUnavailable}
             {retryImageId && !attachment && imageUnavailable && <span> {imageUnavailable}</span>}
             {retryImageId && <button type="button" onClick={clearDraft}>Cancel retry</button>}
-          </div>
+          </div></>}
         </form>
-        <p className="composer-footer">A helpful second perspective. Always give important details a second look.</p>
+        <p className="composer-footer">{imageMode ? "Image files stay on this browser. Download images you want to keep. Prompt and job details sync with your chat." : "A helpful second perspective. Always give important details a second look."}</p>
       </div></div>
     </div>
     {toast && <div className="toast" role="status">{toast}<button onClick={() => setToast("")} aria-label="Dismiss notification"><X size={14}/></button></div>}
@@ -504,7 +530,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
       onRefresh={() => { void statusRequests.current?.refresh(); }}
       onApply={(model, next) => { if (canUseAdvancedSettings) { setPreferences(previous => ({ ...previous, [model]: next })); setToast(`${modelInfo(model).label} settings saved.`); } }}/>
       {canUseAdvancedSettings && diagnosticRecords.length > 0 && <div className="diagnostic-session"><p className="settings-help">{diagnosticRecords.length} diagnostic records in this session (latest 100). Reloading or signing out clears them.</p><button type="button" className="secondary-button" onClick={() => exportDiagnostics(diagnosticRecords)}>Export session CSV</button></div>}
-      <section className="history-settings" aria-label="Chat history"><h3>Chat history</h3><p className="settings-help">New chats sync across devices. Cloud history keeps up to 50 chats or 2,000,000 UTF-8 bytes of text and chat details. Chats with the oldest last message are removed when full, except the chat being saved. Older browser conversations stay local, including future replies.</p><p className="settings-help">Text and chat details only. Images aren’t included. Export a copy before deleting or reaching the limit.</p><div className="history-export-actions"><button className="secondary-button" disabled={exporting || !chats.length} onClick={() => { void downloadHistory("json", true); }}>Export JSON</button><button className="secondary-button" disabled={exporting || !chats.length} onClick={() => { void downloadHistory("md", true); }}>Export Markdown</button></div>{active && <div className="history-export-actions"><button className="secondary-button" disabled={exporting} onClick={() => { void downloadHistory("json"); }}>Export this chat as JSON</button><button className="secondary-button" disabled={exporting} onClick={() => { void downloadHistory("md"); }}>Export this chat as Markdown</button></div>}{hasPending && <p className="settings-help">A change is waiting to sync. <button className="secondary-button" onClick={() => { void cloud?.retry(); }}>Retry sync</button></p>}</section><p className="settings-footnote">In live mode, messages you send are processed by your model. Older messages may be omitted to fit its context.</p><button className="signout-button" onClick={logout}><LogOut size={16}/> Sign out</button></>}</div></div>}
+      <section className="history-settings" aria-label="Chat history"><h3>Chat history</h3><p className="settings-help">New chats sync across devices. Cloud history keeps up to 50 chats or 2,000,000 UTF-8 bytes of text and chat details. Chats with the oldest last message are removed when full, except the chat being saved. Older browser conversations stay local, including future replies.</p><p className="settings-help">Text, generated prompts and job details sync. Image files stay in the browser and aren’t included in exports. Export a copy before deleting or reaching the limit.</p><div className="history-export-actions"><button className="secondary-button" disabled={exporting || !chats.length} onClick={() => { void downloadHistory("json", true); }}>Export JSON</button><button className="secondary-button" disabled={exporting || !chats.length} onClick={() => { void downloadHistory("md", true); }}>Export Markdown</button></div>{active && <div className="history-export-actions"><button className="secondary-button" disabled={exporting} onClick={() => { void downloadHistory("json"); }}>Export this chat as JSON</button><button className="secondary-button" disabled={exporting} onClick={() => { void downloadHistory("md"); }}>Export this chat as Markdown</button></div>}{hasPending && <p className="settings-help">A change is waiting to sync. <button className="secondary-button" onClick={() => { void cloud?.retry(); }}>Retry sync</button></p>}</section><p className="settings-footnote">In live mode, messages you send are processed by your model. Older messages may be omitted to fit its context.</p><button className="signout-button" onClick={logout}><LogOut size={16}/> Sign out</button></>}</div></div>}
   </div>;
 }
 
