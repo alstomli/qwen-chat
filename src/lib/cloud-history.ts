@@ -193,7 +193,7 @@ export class CloudHistoryStore {
           // Do not enqueue a request unless the local outbox is durable.
           // Chat/inference still works in memory, and explicit Retry can recover storage later.
           if (!this.durable) { entry.state = "pending"; this.changed(); break; }
-          const response = await this.rpc("save_chat", { p_id: id, p_payload: operation.payload, p_revision: operation.revision, p_operation: operation.id, p_created_at: entry.createdAt });
+          const response = await this.rpc("save_chat_v2", { p_id: id, p_payload: operation.payload, p_revision: operation.revision, p_operation: operation.id, p_created_at: entry.createdAt });
           if (this.disposed) return;
           if (response.error) throw new Error("Save failed");
           this.mutationEpoch++;

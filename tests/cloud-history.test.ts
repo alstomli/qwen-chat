@@ -19,7 +19,7 @@ function harness(rpc:HistoryRpc) {
 
 test('refresh begun before successful create cannot remove newly acknowledged conversation',async()=>{
   const save=deferred<Reply>(), list=deferred<Reply>();
-  const {store}=harness(async name=>name==='save_chat'?save.promise:name==='list_chat_history'?list.promise:{data:usage,error:null});
+  const {store}=harness(async name=>name==='save_chat_v2'?save.promise:name==='list_chat_history'?list.promise:{data:usage,error:null});
   const c=chat(); store.stage(c); const refresh=store.refresh();
   save.resolve({data:{status:'saved',revision:1,evicted:[],usage},error:null}); await turn();
   list.resolve({data:[],error:null}); await refresh; await turn();
@@ -29,7 +29,7 @@ test('refresh begun before successful create cannot remove newly acknowledged co
 
 test('refresh begun before successful update cannot regress newer acknowledged revision',async()=>{
   const save=deferred<Reply>(), list=deferred<Reply>();
-  const {store}=harness(async name=>name==='save_chat'?save.promise:name==='list_chat_history'?list.promise:{data:usage,error:null});
+  const {store}=harness(async name=>name==='save_chat_v2'?save.promise:name==='list_chat_history'?list.promise:{data:usage,error:null});
   const c=chat(); store.entries.set(c.id,snapshot(c,2)); const refresh=store.refresh(); store.stage(chat(c.id,'updated locally'));
   save.resolve({data:{status:'saved',revision:3,evicted:[],usage},error:null}); await turn();
   list.resolve({data:[{id:c.id,title:'stale cloud',updatedAt:1,revision:1,cursor:new Date().toISOString()}],error:null}); await refresh;
@@ -47,7 +47,7 @@ test('refresh omission preserves every unsynced recovery state for export',async
 test('snapshot staged for earlier chat while later chat is saving is eventually flushed',async()=>{
   const calls:{args:Record<string,unknown>|undefined;response:ReturnType<typeof deferred<Reply>>}[]=[];
   const {store}=harness(async(name,args)=>{
-    if(name!=='save_chat') return {data:usage,error:null};
+    if(name!=='save_chat_v2') return {data:usage,error:null};
     const response=deferred<Reply>(); calls.push({args,response}); return response.promise;
   });
   const a=chat(),b=chat(); store.entries.set(a.id,snapshot(a)); store.entries.set(b.id,snapshot(b));
@@ -113,7 +113,7 @@ test('message load started before newer refresh cannot regress observed revision
 
 test('stale refresh usage cannot replace newer successful save usage acknowledgement',async()=>{
   const save=deferred<Reply>(), list=deferred<Reply>(), oldUsage=deferred<Reply>();
-  const {store}=harness(async name=>name==='save_chat'?save.promise:name==='list_chat_history'?list.promise:oldUsage.promise);
+  const {store}=harness(async name=>name==='save_chat_v2'?save.promise:name==='list_chat_history'?list.promise:oldUsage.promise);
   const refresh=store.refresh(); store.stage(chat());
   save.resolve({data:{status:'saved',revision:1,evicted:[],usage},error:null}); await turn();
   assert.equal(store.usage.count,1);
@@ -142,7 +142,7 @@ test('cloud load, later save and durable restore preserve older source metadata'
   let saved:Record<string,unknown>|undefined;
   const {store,storage}=harness(async(name,args)=>{
     if(name==='get_chat_history_v2') return {data:{payload:cloudPayload(c),revision:1,totalMessages:2,updatedAt:c.updatedAt},error:null};
-    if(name==='save_chat') {saved=args; return {data:{status:'saved',revision:2,evicted:[],usage},error:null};}
+    if(name==='save_chat_v2') {saved=args; return {data:{status:'saved',revision:2,evicted:[],usage},error:null};}
     return {data:usage,error:null};
   });
   store.entries.set(c.id,{...snapshot(c),loaded:false});
@@ -160,7 +160,7 @@ test('cloud load, later save and durable restore preserve older source metadata'
 
 test('retired model cache entries and pending writes never restore or reach the cloud', async () => {
   let saves = 0;
-  const { store, records } = harness(async name => { if (name === 'save_chat') saves++; return { data: usage, error: null }; });
+  const { store, records } = harness(async name => { if (name === 'save_chat_v2') saves++; return { data: usage, error: null }; });
   const retained = chat(); retained.model = 'bf16';
   const removed = { ...chat(), model: '4bit' } as unknown as Conversation;
   const legacyAnswer = { ...chat(), model: 'bf16', messages: [{ id: 'old', role: 'assistant', content: 'old', model: '4bit' }] } as unknown as Conversation;
@@ -202,4 +202,20 @@ test('a rejected later history page cannot merge an earlier partial page into th
   assert.equal(pages,2); assert.equal(events.merges.length,0);
   assert.equal(store.entries.get(c.id)?.loaded,false); assert.deepEqual(store.entries.get(c.id)?.chat.messages,[]);
   store.dispose();
+});
+
+test('edit history saves and retries use only the versioned writer with intact metadata', async () => {
+  const calls: { name: string; args?: Record<string,unknown> }[] = [];
+  const { store } = harness(async (name,args) => {
+    calls.push({ name,args });
+    if (calls.length === 1) return { data: null,error: { message: 'temporary failure' } };
+    return { data: { status: 'saved',revision: 1,evicted: [],usage },error: null };
+  });
+  const c = chat(); c.messages = [{ id: 'edit-message',role: 'assistant',content: '',state: 'complete',generatedImage: { version: 2,mode: 'edit',sourceImageId: 'source-message',prompt: 'make it blue',requestId: 'edit-request',status: 'completed' } }];
+  store.stage(c); await turn(); assert.equal(store.entries.get(c.id)?.state,'pending');
+  await store.retry(); await turn();
+  assert.deepEqual(calls.map(call => call.name),['save_chat_v2','save_chat_v2']);
+  for (const call of calls) assert.deepEqual((call.args?.p_payload as ReturnType<typeof cloudPayload>).messages[0].generatedImage,c.messages[0].generatedImage);
+  assert.equal(calls[0].args?.p_operation,calls[1].args?.p_operation);
+  assert.equal(store.entries.get(c.id)?.state,'saved'); store.dispose();
 });
