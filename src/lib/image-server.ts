@@ -15,6 +15,7 @@ export function validPng(bytes: Uint8Array) {
     && new DataView(bytes.buffer, bytes.byteOffset).getUint32(16) === 1024 && new DataView(bytes.buffer, bytes.byteOffset).getUint32(20) === 1024;
 }
 const safeErrors: Record<string,string> = { daily_quota: "Your daily image limit has been reached. It resets at midnight UTC.", unavailable: "The image model is loading or unavailable. Check again shortly.", idempotency_conflict: "This request ID belongs to a different prompt. Generate a new image request.", unavailable_image: "This image result is unavailable or expired.", not_completed: "This image is still being generated. Check the same job.", account_busy: "Your account already has an image in progress.", user_capacity: "Your account already has an image in progress.", queue_full: "The image queue is full. Try again shortly.", daily_limit: "Your daily image limit has been reached.", quota_exceeded: "Your daily image limit has been reached.", expired: "This image result has expired.", not_found: "This image job is unavailable.", not_ready: "The image model is loading. Check again shortly." };
+safeErrors.busy = "The image service is busy creating another image. Try again shortly.";
 const headers = { "Cache-Control": "private, no-store" };
 export async function imageProxy(request: Request, jobId?: string, download = false) {
   const principal = await requestPrincipal(request);

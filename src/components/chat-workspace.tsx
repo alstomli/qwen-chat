@@ -478,7 +478,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
         {!imageMode && connection.mode === "live" && !connection.ready && <div className="offline-note">Your model may be stopped or loading. You can try again when it’s ready.</div>}
         <form className="composer" onSubmit={e => { e.preventDefault(); if (imageMode) generateImage(); else void send(); }}>
           {canUseAdvancedSettings && <div className="composer-modes" role="group" aria-label="Composer mode"><button type="button" aria-pressed={!imageMode} onClick={() => setImageMode(false)}>Chat</button><button type="button" aria-pressed={imageMode} onClick={() => setImageMode(true)}>Create image</button></div>}
-          {imageMode && <div className="image-mode-info"><strong>FLUX.2 dev · 1024 × 1024 PNG</strong><p>Describe a new image. Only this prompt is used; chat history and attachments are excluded.</p>{!imageJobs.available && <p role="status">{imageJobs.reason} <button type="button" onClick={() => { void imageJobs.refresh(); }}>Check again</button></p>}</div>}
+          {imageMode && <div className="image-mode-info"><strong>FLUX.2 dev · 1024 × 1024 PNG</strong><p>Describe a new image. Only this prompt is used; chat history and attachments are excluded. The service creates one image at a time, with no waiting queue.</p>{!imageJobs.available && <p role="status">{imageJobs.reason} <button type="button" onClick={() => { void imageJobs.refresh(); }}>Check again</button></p>}</div>}
           {!imageMode && attachment && <div className="composer-attachment">
             <img src={attachment.dataUrl} alt="Image preview"/>
             <span title={attachment.name}>{attachment.name}</span>

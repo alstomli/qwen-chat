@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { imageProxy, boundedBytes, validPng } from "../src/lib/image-server";
-import { parseGeneratedImage } from "../src/lib/generated-image";
+import { imageFailureStatus, parseGeneratedImage } from "../src/lib/generated-image";
 import { cloudPayload, historyMarkdown } from "../src/lib/cloud-history";
 import { completedHistory, parseConversations, type Conversation } from "../src/lib/storage";
 import { adminIds, authResponse, cookieHeader, issueSession } from "./auth-fixture";
@@ -44,6 +44,10 @@ test("image proxy enforces admin identity, origin, bounds, trusted paths and san
     assert.equal((await imageProxy(request(undefined, "https://evil.example"))).status, 403);
     assert.equal((await imageProxy(request({ prompt: "x".repeat(13000) }))).status, 400);
     assert.equal(upstream, 1);
+    reply = () => Response.json({ error: { code: "busy", message: "private detail" } }, { status: 429, headers: { "Retry-After": "5" } });
+    const busy = await imageProxy(request());
+    assert.equal(busy.status, 429); assert.equal(busy.headers.get("Retry-After"), "5");
+    assert.match((await busy.json()).error.message, /busy creating another image/);
     reply = () => Response.json({ error: { code: "unknown", message: "private secret" } }, { status: 500 });
     assert.doesNotMatch(await (await imageProxy(request())).text(), /private secret/);
     reply = () => Response.json({ jobId: "../secret", status: "completed" });
@@ -51,4 +55,15 @@ test("image proxy enforces admin identity, origin, bounds, trusted paths and san
     process.env.FLUX_IMAGE_API_URL = "http://flux.example";
     assert.equal((await imageProxy(request())).status, 503);
   } finally { globalThis.fetch = original; process.env = env; }
+});
+
+
+test("no-queue busy admission fails visibly while transient reads retain the known job", () => {
+  const image = { version: 1 as const, requestId: "request", prompt: "tree", status: "submitting" as const };
+  assert.equal(imageFailureStatus(image,429), "failed");
+  const generating = { ...image, jobId: "known", status: "generating" as const };
+  assert.equal(imageFailureStatus(generating,429), "generating");
+  assert.equal(imageFailureStatus(generating,503), "generating");
+  assert.equal(imageFailureStatus(generating,404), "failed");
+  assert.equal(imageFailureStatus(generating,410), "expired");
 });

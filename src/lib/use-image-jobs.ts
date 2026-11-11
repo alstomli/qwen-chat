@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { imagePending, parseGeneratedImage, type GeneratedImage } from "./generated-image";
+import { imageFailureStatus, imagePending, parseGeneratedImage, type GeneratedImage } from "./generated-image";
 import { loadImage, removeImage, saveImage } from "./image-store";
 import type { Conversation } from "./storage";
 
@@ -54,11 +54,14 @@ export function useImageJobs(userId: string, enabled: boolean, chats: Conversati
         const response = await fetch(`/api/images/${image.jobId}/image`, { signal, cache: "no-store" });
         if (!response.ok) throw new Error("Couldn't retrieve this image. Check the same job before its result expires.");
         const blob = await response.blob(); if (blob.type !== "image/png" || !blob.size) throw new Error("The image could not be read.");
+        const decoded = await createImageBitmap(blob);
+        try { if (decoded.width !== 1024 || decoded.height !== 1024) throw new Error("The image has unexpected dimensions."); }
+        finally { decoded.close(); }
         signal.throwIfAborted(); await saveImage(userId, messageId, blob, signal); note("");
       } else if (image.status === "failed") note("The image could not be generated. Edit your prompt or generate again.");
     } catch (error) {
       if (!signal.aborted) {
-        if (error instanceof ImageRequestError && ([400,403,404,410].includes(error.status) || (!image.jobId && [409,429].includes(error.status)))) update({ ...image, status: error.status === 410 ? "expired" : "failed" });
+        if (error instanceof ImageRequestError) update({ ...image, status: imageFailureStatus(image, error.status) });
         note(error instanceof Error ? error.message : "Connection interrupted. Check the same job.");
       }
     }

@@ -12,3 +12,10 @@ export function parseGeneratedImage(value: unknown): GeneratedImage | undefined 
     ...(typeof v.jobId === "string" ? { jobId: v.jobId } : {}), ...(v.cancellationRequested === true ? { cancellationRequested: true } : {}) };
 }
 export function imagePending(image: GeneratedImage) { return ["submitting", "queued", "generating"].includes(image.status); }
+
+/** Rejected admission is terminal; temporary reads must keep the original job recoverable. */
+export function imageFailureStatus(image: GeneratedImage, httpStatus: number): ImageState {
+  if (httpStatus === 410) return "expired";
+  if ([400,403,404].includes(httpStatus) || (!image.jobId && [409,429].includes(httpStatus))) return "failed";
+  return image.status;
+}
