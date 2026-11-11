@@ -7,6 +7,7 @@ import { RequestDiagnostics, exportDiagnostics } from "@/components/request-diag
 import { DIAGNOSTICS_HEADER, parseDiagnosticHeader, type BrowserTimings, type DiagnosticRecord } from "@/lib/diagnostics";
 import { ImageJobCard } from "@/components/image-job-card";
 import { useImageJobs } from "@/lib/use-image-jobs";
+import { ownsImageRequest, rememberImageRequest } from "@/lib/image-origin";
 import { imagePending, type GeneratedImage } from "@/lib/generated-image";
 import { AnswerPaint } from "@/components/answer-paint";
 import { ModelSettingsPanel } from "@/components/model-settings-panel";
@@ -339,8 +340,9 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
     prompt = prompt.trim();
     if (!canUseAdvancedSettings || !imageJobs.available || !prompt || prompt.length > 2000) return;
     if (activeId && cloud?.entries.get(activeId)?.loaded === false) { setToast("Load this conversation first."); return; }
-    if (chats.some(chat => chat.messages.some(message => message.generatedImage && imagePending(message.generatedImage)))) { setToast("Your account already has an image in progress. Wait for it or cancel it first."); return; }
+    if (chats.some(chat => chat.messages.some(message => message.generatedImage && ownsImageRequest(userId, message.generatedImage.requestId) && imagePending(message.generatedImage)))) { setToast("Your account already has an image in progress. Wait for it or cancel it first."); return; }
     const id = activeId ?? uid(); const messageId = uid();
+    try { rememberImageRequest(userId, messageId); } catch (error) { setToast(error instanceof Error ? error.message : "Browser storage is unavailable."); return; }
     const generatedImage: GeneratedImage = { version: 1, prompt, requestId: messageId, status: "submitting" };
     setChats(current => [{ id, model: selectedModel, title: active?.title ?? prompt.slice(0, 48), updatedAt: Date.now(), messages: [...(current.find(chat => chat.id === id)?.messages ?? []), { id: messageId, role: "assistant", content: "", state: "complete", generatedImage }] }, ...current.filter(chat => chat.id !== id)]);
     setActiveId(id); setImageDraft(""); imageDrafts.current.delete(activeId); follow.current = true;

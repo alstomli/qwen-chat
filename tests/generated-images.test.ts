@@ -5,6 +5,42 @@ import { imageFailureStatus, parseGeneratedImage } from "../src/lib/generated-im
 import { cloudPayload, historyMarkdown } from "../src/lib/cloud-history";
 import { completedHistory, parseConversations, type Conversation } from "../src/lib/storage";
 import { adminIds, authResponse, cookieHeader, issueSession } from "./auth-fixture";
+import { ownsImageRequest, rememberImageRequest, forgetImageRequest } from "../src/lib/image-origin";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ImageJobCard } from "../src/components/image-job-card";
+
+test("foreign pending image cards offer explicit regeneration without live-job controls", () => {
+  for (const status of ["submitting", "generating", "completed"] as const) {
+    const html = renderToStaticMarkup(createElement(ImageJobCard, { userId: "alice", id: "message", image: { version: 1, requestId: "foreign", prompt: "tree", status }, allowed: true, onCheck() {}, onCancel() {}, onEdit() {}, onGenerate() {} }));
+    assert.match(html, /Saved job details/);
+    assert.match(html, /Generate again/);
+    assert.doesNotMatch(html, /Check same job|Cancel generation|Saved on this browser/);
+  }
+});
+
+test("only the originating browser and account can resume a synced image request", () => {
+  const browser = () => { const data = new Map<string,string>(); return { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key,value); }, removeItem: (key: string) => { data.delete(key); } }; };
+  const origin = browser(), otherBrowser = browser();
+  rememberImageRequest("alice", "request", origin);
+  assert.equal(ownsImageRequest("alice", "request", origin), true);
+  assert.equal(ownsImageRequest("bob", "request", origin), false);
+  assert.equal(ownsImageRequest("alice", "request", otherBrowser), false);
+  // Cloud metadata can be identical; it does not establish origin in another store.
+  const synced = { version: 1, prompt: "tree", requestId: "request", status: "submitting" };
+  assert.ok(parseGeneratedImage(synced));
+  assert.equal(ownsImageRequest("alice", synced.requestId, otherBrowser), false);
+  forgetImageRequest("alice", "request", origin);
+  assert.equal(ownsImageRequest("alice", "request", origin), false);
+});
+
+test("unavailable, full or nonpersistent browser storage never grants image origin", () => {
+  const unavailable = { getItem() { throw new Error("denied"); }, setItem() { throw new Error("full"); }, removeItem() {} };
+  assert.equal(ownsImageRequest("alice", "request", unavailable), false);
+  assert.throws(() => rememberImageRequest("alice", "request", unavailable), /couldn't save/);
+  const silentFailure = { getItem() { return null; }, setItem() {}, removeItem() {} };
+  assert.throws(() => rememberImageRequest("alice", "request", silentFailure), /couldn't save/);
+});
 
 test("generated prompts survive cloud/export whitelists without entering Qwen context", () => {
   const generatedImage = { version: 1 as const, requestId: "request", prompt: "An olive tree", status: "queued" as const, jobId: "job", url: "https://secret.example/file", token: "secret" };

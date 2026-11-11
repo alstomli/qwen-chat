@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { imageFailureStatus, imagePending, parseGeneratedImage, type GeneratedImage } from "./generated-image";
+import { ownsImageRequest, forgetImageRequest } from "./image-origin";
 import { loadImage, removeImage, saveImage } from "./image-store";
 import type { Conversation } from "./storage";
 
@@ -27,7 +28,7 @@ export function useImageJobs(userId: string, enabled: boolean, chats: Conversati
     return () => { epoch.current++; mounted.current = false; for (const request of requests.values()) request.abort(); requests.clear(); };
   }, [refresh, userId]);
   const track = useCallback(async (chatId: string, messageId: string, original: GeneratedImage) => {
-    if (!enabled || running.current.has(messageId)) return;
+    if (!enabled || !ownsImageRequest(userId, original.requestId) || running.current.has(messageId)) return;
     const controller = new AbortController(); running.current.set(messageId, controller);
     const signal = controller.signal;
     const note = (text: string) => { if (!signal.aborted) setNotes(current => ({ ...current, [messageId]: text })); };
@@ -68,7 +69,7 @@ export function useImageJobs(userId: string, enabled: boolean, chats: Conversati
     finally { if (running.current.get(messageId) === controller) running.current.delete(messageId); }
   }, [enabled, userId, setChats]);
   useEffect(() => { if (enabled) for (const chat of chats) for (const message of chat.messages) {
-    if (message.generatedImage && !notes[message.id]) {
+    if (message.generatedImage && ownsImageRequest(userId, message.generatedImage.requestId) && !notes[message.id]) {
       if (imagePending(message.generatedImage)) void track(chat.id, message.id, message.generatedImage);
       else if (message.generatedImage.status === "completed" && !recovered.current.has(message.id)) {
         recovered.current.add(message.id); const owner = epoch.current; void loadImage(userId, message.id).then(blob => { if (!blob && mounted.current && epoch.current === owner) void track(chat.id, message.id, message.generatedImage!); }).catch(() => {});
@@ -76,7 +77,7 @@ export function useImageJobs(userId: string, enabled: boolean, chats: Conversati
     }
   } }, [chats, enabled, track, notes, userId]);
   async function cancel(chatId: string, messageId: string, image: GeneratedImage) {
-    if (!image.jobId) return;
+    if (!image.jobId || !ownsImageRequest(userId, image.requestId)) return;
     const owner = epoch.current;
     try {
       const job = await read(`/api/images/${image.jobId}`, { method: "DELETE" });
@@ -84,6 +85,6 @@ export function useImageJobs(userId: string, enabled: boolean, chats: Conversati
       if (mounted.current && epoch.current === owner && parsed) setChats(current => current.map(chat => chat.id !== chatId ? chat : { ...chat, messages: chat.messages.map(message => message.id === messageId ? { ...message, generatedImage: parsed } : message) }));
     } catch (error) { if (mounted.current && epoch.current === owner) setNotes(current => ({ ...current, [messageId]: error instanceof Error ? error.message : "Cancellation could not be confirmed." })); }
   }
-  function cleanup(chat: Conversation) { for (const message of chat.messages) if (message.generatedImage) { running.current.get(message.id)?.abort(); if (imagePending(message.generatedImage) && message.generatedImage.jobId) void fetch(`/api/images/${message.generatedImage.jobId}`, { method: "DELETE" }).catch(() => {}); void removeImage(userId, message.id).catch(() => {}); } }
+  function cleanup(chat: Conversation) { for (const message of chat.messages) if (message.generatedImage) { running.current.get(message.id)?.abort(); if (ownsImageRequest(userId, message.generatedImage.requestId) && imagePending(message.generatedImage) && message.generatedImage.jobId) void fetch(`/api/images/${message.generatedImage.jobId}`, { method: "DELETE" }).catch(() => {}); forgetImageRequest(userId, message.generatedImage.requestId); void removeImage(userId, message.id).catch(() => {}); } }
   return { available, reason, refresh, notes, track, cancel, cleanup };
 }
