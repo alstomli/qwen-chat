@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { referenceEditingAvailable } from "./image-reference";
 import { requestImageJob } from "./image-request";
 import { imageFailureStatus, imagePending, parseGeneratedImage, type GeneratedImage } from "./generated-image";
 import { ownsImageRequest, forgetImageRequest } from "./image-origin";
@@ -13,6 +14,8 @@ async function readResponse(response: Response) {
 }
 async function read(url: string, init?: RequestInit) { return readResponse(await fetch(url, { cache: "no-store", ...init })); }
 export function useImageJobs(userId: string, enabled: boolean, chats: Conversation[], setChats: Dispatch<SetStateAction<Conversation[]>>) {
+  const [editingAvailable, setEditingAvailable] = useState(false);
+  const references = useRef(new Map<string,string>());
   const [available, setAvailable] = useState(false); const [reason, setReason] = useState("Checking image service…");
   const [notes, setNotes] = useState<Record<string, string>>({});
   const epoch = useRef(0); const recovered = useRef(new Set<string>());
@@ -20,16 +23,19 @@ export function useImageJobs(userId: string, enabled: boolean, chats: Conversati
   const refresh = useCallback(async () => {
     if (!enabled) return;
     const owner = epoch.current;
-    try { const data = await read("/api/images"); if (!mounted.current || epoch.current !== owner) return; setAvailable(data.enabled === true); setReason(data.enabled ? "" : "Image service is loading. Check again shortly."); }
-    catch (error) { if (mounted.current && epoch.current === owner) { setAvailable(false); setReason(error instanceof Error ? error.message : "Image service unavailable."); } }
+    try { const data = await read("/api/images"); if (!mounted.current || epoch.current !== owner) return; setAvailable(data.enabled === true); setEditingAvailable(data.enabled === true && data.referenceEditing === true && referenceEditingAvailable(data.imageEditing)); setReason(data.enabled ? "" : "Image service is loading. Check again shortly."); }
+    catch (error) { if (mounted.current && epoch.current === owner) { setAvailable(false); setEditingAvailable(false); setReason(error instanceof Error ? error.message : "Image service unavailable."); } }
   }, [enabled]);
   useEffect(() => {
-    epoch.current++; mounted.current = true; setAvailable(false); setNotes({}); recovered.current.clear(); void refresh();
+    epoch.current++; mounted.current = true; setAvailable(false); setEditingAvailable(false); references.current.clear(); setNotes({}); recovered.current.clear(); void refresh();
     const requests = running.current;
-    return () => { epoch.current++; mounted.current = false; for (const request of requests.values()) request.abort(); requests.clear(); };
+    return () => { epoch.current++; mounted.current = false; for (const request of requests.values()) request.abort(); requests.clear(); references.current.clear(); };
   }, [refresh, userId]);
-  const track = useCallback(async (chatId: string, messageId: string, original: GeneratedImage, explicitSubmission = false) => {
+  const track = useCallback(async (chatId: string, messageId: string, original: GeneratedImage, explicitSubmission = false, referenceImage?: string) => {
     if (!enabled || !ownsImageRequest(userId, original.requestId) || (!original.jobId && !explicitSubmission) || running.current.has(messageId)) return;
+    // Keep only the latest ambiguous edit: each normalized data URL can approach 3 MiB.
+    // Older unknown submissions can be restarted explicitly from their saved source.
+    if (referenceImage && original.mode === "edit") { references.current.clear(); references.current.set(original.requestId, referenceImage); }
     const controller = new AbortController(); running.current.set(messageId, controller);
     const signal = controller.signal;
     const note = (text: string) => { if (!signal.aborted) setNotes(current => ({ ...current, [messageId]: text })); };
@@ -37,10 +43,11 @@ export function useImageJobs(userId: string, enabled: boolean, chats: Conversati
     let image = original;
     try {
       note("");
-      const response = await requestImageJob(image, explicitSubmission, signal);
+      const response = await requestImageJob(image, explicitSubmission, signal, fetch, references.current.get(image.requestId));
       if (!response) return;
       let job = await readResponse(response);
       while (!signal.aborted) {
+        if (image.mode === "edit" && job.kind !== "edit") throw new Error("The image service did not confirm this reference edit.");
         const parsed = parseGeneratedImage({ ...image, jobId: job.jobId, status: job.status, cancellationRequested: job.cancellationRequested === true });
         if (!parsed?.jobId) throw new Error("The image service returned an invalid job.");
         image = parsed; update(image);
@@ -65,11 +72,12 @@ export function useImageJobs(userId: string, enabled: boolean, chats: Conversati
       } else if (image.status === "failed") note("The image could not be generated. Edit your prompt or generate again.");
     } catch (error) {
       if (!signal.aborted) {
-        if (error instanceof ImageRequestError) update({ ...image, status: imageFailureStatus(image, error.status) });
+        if (error instanceof ImageRequestError) { image = { ...image, status: imageFailureStatus(image, error.status) }; update(image); }
+        else if (image.mode === "edit" && !image.jobId && !references.current.has(image.requestId)) { image = { ...image, status: "failed" }; update(image); }
         note(error instanceof Error ? error.message : "Connection interrupted. Check the same job.");
       }
     }
-    finally { if (running.current.get(messageId) === controller) running.current.delete(messageId); }
+    finally { if (image.jobId || !imagePending(image)) references.current.delete(image.requestId); if (running.current.get(messageId) === controller) running.current.delete(messageId); }
   }, [enabled, userId, setChats]);
   useEffect(() => { if (enabled) for (const chat of chats) for (const message of chat.messages) {
     if (message.generatedImage && ownsImageRequest(userId, message.generatedImage.requestId) && !notes[message.id]) {
@@ -84,10 +92,11 @@ export function useImageJobs(userId: string, enabled: boolean, chats: Conversati
     const owner = epoch.current;
     try {
       const job = await read(`/api/images/${image.jobId}`, { method: "DELETE" });
-      const parsed = parseGeneratedImage({ ...image, status: job.status, cancellationRequested: job.cancellationRequested === true });
+      if (image.mode === "edit" && job.kind !== "edit") throw new Error("The image service did not confirm this reference edit.");
+        const parsed = parseGeneratedImage({ ...image, status: job.status, cancellationRequested: job.cancellationRequested === true });
       if (mounted.current && epoch.current === owner && parsed) setChats(current => current.map(chat => chat.id !== chatId ? chat : { ...chat, messages: chat.messages.map(message => message.id === messageId ? { ...message, generatedImage: parsed } : message) }));
     } catch (error) { if (mounted.current && epoch.current === owner) setNotes(current => ({ ...current, [messageId]: error instanceof Error ? error.message : "Cancellation could not be confirmed." })); }
   }
-  function cleanup(chat: Conversation) { for (const message of chat.messages) if (message.generatedImage) { running.current.get(message.id)?.abort(); if (ownsImageRequest(userId, message.generatedImage.requestId) && imagePending(message.generatedImage) && message.generatedImage.jobId) void fetch(`/api/images/${message.generatedImage.jobId}`, { method: "DELETE" }).catch(() => {}); forgetImageRequest(userId, message.generatedImage.requestId); void removeImage(userId, message.id).catch(() => {}); } }
-  return { available, reason, refresh, notes, track, cancel, cleanup };
+  function cleanup(chat: Conversation) { for (const message of chat.messages) if (message.generatedImage) { running.current.get(message.id)?.abort(); if (ownsImageRequest(userId, message.generatedImage.requestId) && imagePending(message.generatedImage) && message.generatedImage.jobId) void fetch(`/api/images/${message.generatedImage.jobId}`, { method: "DELETE" }).catch(() => {}); references.current.delete(message.generatedImage.requestId); forgetImageRequest(userId, message.generatedImage.requestId); void removeImage(userId, message.id).catch(() => {}); } }
+  return { available, editingAvailable, hasTrackingRequests: () => running.current.size > 0, reason, refresh, notes, track, cancel, cleanup };
 }

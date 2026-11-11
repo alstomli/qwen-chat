@@ -1,3 +1,5 @@
+import { IMAGE_REQUEST_MAX_BYTES, referenceEditingAvailable } from "./image-reference";
+import { validateReferenceImage } from "./image-reference-server";
 import { requestPrincipal, sameOrigin } from "./auth";
 import { parseGeneratedImage } from "./generated-image";
 
@@ -30,16 +32,18 @@ export async function imageProxy(request: Request, jobId?: string, download = fa
   let target: URL;
   try { target = new URL(base); if (target.username || target.password || target.search || target.hash || !(target.protocol === "https:" || (process.env.NODE_ENV !== "production" && target.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(target.hostname)))) throw new Error(); }
   catch { return error("Image service configuration is invalid.", 503); }
-  let body: string | undefined;
+  let body: string | undefined; let editRequest = false;
   const outgoing: Record<string, string> = { Authorization: `Bearer ${token}`, "X-Chat-User-Id": principal.userId };
   if (request.method === "POST") {
     try {
       if (request.headers.get("Content-Type")?.split(";")[0].trim() !== "application/json") throw new Error();
-      const text = new TextDecoder().decode(await boundedBytes(request.body, 12000));
+      const text = new TextDecoder().decode(await boundedBytes(request.body, IMAGE_REQUEST_MAX_BYTES));
       const input = JSON.parse(text); const key = request.headers.get("Idempotency-Key");
-      if (!parseGeneratedImage({ version: 1, prompt: input.prompt, requestId: key, status: "submitting" })) throw new Error();
-      body = JSON.stringify({ prompt: input.prompt.trim() }); outgoing["Idempotency-Key"] = key!; outgoing["Content-Type"] = "application/json";
-    } catch { return error("Enter an image prompt of up to 2,000 characters.", 400); }
+      if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some(name => !["prompt", "referenceImage"].includes(name)) || !parseGeneratedImage({ version: 1, prompt: input.prompt, requestId: key, status: "submitting" })) throw new Error();
+      const referenceImage = input.referenceImage === undefined ? undefined : await validateReferenceImage(input.referenceImage);
+      editRequest = referenceImage !== undefined;
+      body = JSON.stringify({ prompt: input.prompt.trim(), ...(referenceImage ? { referenceImage } : {}) }); outgoing["Idempotency-Key"] = key!; outgoing["Content-Type"] = "application/json";
+    } catch { return error("Enter a prompt of up to 2,000 characters and, for edits, one valid 1024 × 1024 PNG or JPEG reference up to 3 MiB.", 400); }
   }
   const path = jobId ? `/v1/image-jobs/${encodeURIComponent(jobId)}${download ? "/image" : ""}` : request.method === "GET" ? "/capabilities" : "/v1/image-jobs";
   try {
@@ -58,11 +62,12 @@ export async function imageProxy(request: Request, jobId?: string, download = fa
     let data;
     if (!jobId && request.method === "GET") {
       if (raw.version !== 1 || raw.model !== "FLUX.2-dev" || typeof raw.enabled !== "boolean" || raw.limits?.width !== 1024 || raw.limits?.height !== 1024 || raw.limits?.maxPromptLength !== 2000) return error("The image service is incompatible.", 502);
-      data = { version: 1, model: "FLUX.2-dev", enabled: raw.enabled, limits: { width: 1024, height: 1024, maxPromptLength: 2000 } };
+      data = { version: 1, model: "FLUX.2-dev", enabled: raw.enabled, limits: { width: 1024, height: 1024, maxPromptLength: 2000 }, referenceEditing: raw.referenceEditing === true && referenceEditingAvailable(raw.imageEditing), ...(referenceEditingAvailable(raw.imageEditing) ? { imageEditing: { enabled: true, version: 1, maxReferenceImages: 1, mimeTypes: ["image/png", "image/jpeg"], width: 1024, height: 1024, maxImageBytes: 3145728, maxRequestBytes: IMAGE_REQUEST_MAX_BYTES } } : {}) };
     } else {
       const parsed = parseGeneratedImage({ version: 1, requestId: "validated", prompt: "validated", jobId: raw.jobId, status: raw.status, cancellationRequested: raw.cancellationRequested });
+      if (editRequest && raw.kind !== "edit") return error("The image service did not confirm reference editing. Check the request before starting another edit.", 502);
       if (!parsed?.jobId || (jobId && parsed.jobId !== jobId) || parsed.status === "submitting") return error("The image service returned an invalid job.", 502);
-      data = { jobId: parsed.jobId, status: parsed.status, cancellationRequested: parsed.cancellationRequested === true };
+      data = { jobId: parsed.jobId, status: parsed.status, cancellationRequested: parsed.cancellationRequested === true, ...(["text", "edit"].includes(raw.kind) ? { kind: raw.kind } : {}) };
     }
     const retry = response.headers.get("Retry-After");
     return Response.json(data, { status: response.status, headers: { ...headers, ...(retry && /^\d{1,6}$/.test(retry) ? { "Retry-After": retry } : {}) } });
