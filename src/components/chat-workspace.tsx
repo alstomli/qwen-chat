@@ -369,7 +369,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
     if (!mayStartImageRequest(chats.flatMap(chat => chat.messages.flatMap(message => message.generatedImage && ownsImageRequest(userId, message.generatedImage.requestId) ? [message.generatedImage] : [])), imageJobs.hasTrackingRequests())) { setToast("Your account already has an image in progress. Wait for it or cancel it first."); return; }
     const id = activeId ?? uid(); const messageId = uid();
     try { rememberImageRequest(userId, messageId); } catch (error) { setToast(error instanceof Error ? error.message : "Browser storage is unavailable."); return; }
-    const generatedImage: GeneratedImage = { version: 1, prompt, requestId: messageId, status: "submitting", ...(requireReference && reference ? { mode: "edit", sourceImageId: reference.sourceImageId } : {}) };
+    const generatedImage: GeneratedImage = { version: requireReference ? 2 : 1, prompt, requestId: messageId, status: "submitting", ...(requireReference && reference ? { mode: "edit", sourceImageId: reference.sourceImageId } : {}) };
     setChats(current => [{ id, model: selectedModel, title: active?.title ?? prompt.slice(0, 48), updatedAt: Date.now(), messages: [...(current.find(chat => chat.id === id)?.messages ?? []), { id: messageId, role: "assistant", content: "", state: "complete", generatedImage }] }, ...current.filter(chat => chat.id !== id)]);
     setActiveId(id); setImageDraft(""); setImageReference(null); setReferenceSource(null); imageDrafts.current.delete(activeId); follow.current = true;
     void imageJobs.track(id, messageId, generatedImage, true, requireReference ? reference?.dataUrl : undefined);

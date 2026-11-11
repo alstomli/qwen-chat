@@ -123,7 +123,7 @@ export class CloudHistoryStore {
     for (let attempt = 0; attempt < 3; attempt++) {
       let offset = 0, revision: number | undefined, result: Conversation | undefined; let changed = false;
       do {
-        const response = await this.rpc("get_chat_history", { p_id: id, p_offset: offset, p_limit: 100 });
+        const response = await this.rpc("get_chat_history_v2", { p_id: id, p_offset: offset, p_limit: 100 });
         if (this.disposed) return null;
         if (response.error) throw new Error("Couldn't load this conversation. Try again.");
         const data = response.data as { payload: ReturnType<typeof cloudPayload>; revision: number; totalMessages: number; updatedAt: number } | null;

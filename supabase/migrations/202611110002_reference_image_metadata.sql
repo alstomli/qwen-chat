@@ -31,12 +31,14 @@ begin
       elsif m->>'state' = 'stopped' then clean := clean || jsonb_build_object('note','You stopped this reply.'); end if;
       image := m->'generatedImage';
       if image is not null and image <> 'null'::jsonb then
-        if jsonb_typeof(image) is distinct from 'object' or image->'version' is distinct from '1'::jsonb or
+        if jsonb_typeof(image) is distinct from 'object' or (image->'version' is distinct from '1'::jsonb and image->'version' is distinct from '2'::jsonb) or
+          (image->'version' = '1'::jsonb and image ? 'mode') or
+          (image->'version' = '2'::jsonb and image->>'mode' is distinct from 'edit') or
           jsonb_typeof(image->'prompt') is distinct from 'string' or length(trim(image->>'prompt')) = 0 or length(image->>'prompt') > 2000 or
           coalesce(image->>'requestId','') !~ '^[a-zA-Z0-9_-]{1,128}$' or
           coalesce(image->>'status','') not in ('submitting','queued','generating','completed','failed','cancelled','expired') or
           (image ? 'jobId' and coalesce(image->>'jobId','') !~ '^[a-zA-Z0-9_-]{1,128}$') then raise exception 'Invalid image metadata'; end if;
-        image := jsonb_build_object('version',1,'prompt',image->>'prompt','requestId',image->>'requestId','status',image->>'status') ||
+        image := jsonb_build_object('version',image->'version','prompt',image->>'prompt','requestId',image->>'requestId','status',image->>'status') ||
           case when image ? 'jobId' then jsonb_build_object('jobId',image->>'jobId') else '{}'::jsonb end ||
           case when image->'cancellationRequested' = 'true' then jsonb_build_object('cancellationRequested',true) else '{}'::jsonb end;
         -- Preserve edit intent even if source provenance is absent/invalid; clients must

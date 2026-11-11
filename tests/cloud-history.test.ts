@@ -103,7 +103,7 @@ test('server eviction preserves an older chat with unsynced local recovery conte
 
 test('message load started before newer refresh cannot regress observed revision',async()=>{
   const load=deferred<Reply>(); const c=chat(); let loads=0;
-  const {store}=harness(async name=>name==='get_chat_history'?(++loads===1?load.promise:{data:{payload:cloudPayload(chat(c.id,'revision3')),revision:3,totalMessages:1,updatedAt:3},error:null}):name==='list_chat_history'?{data:[{id:c.id,title:'revision3',updatedAt:3,revision:3,cursor:new Date().toISOString()}],error:null}:{data:usage,error:null});
+  const {store}=harness(async name=>name==='get_chat_history_v2'?(++loads===1?load.promise:{data:{payload:cloudPayload(chat(c.id,'revision3')),revision:3,totalMessages:1,updatedAt:3},error:null}):name==='list_chat_history'?{data:[{id:c.id,title:'revision3',updatedAt:3,revision:3,cursor:new Date().toISOString()}],error:null}:{data:usage,error:null});
   store.entries.set(c.id,{...snapshot(c,2),loaded:false});
   const pending=store.load(c.id); await store.refresh();
   assert.equal(store.entries.get(c.id)?.revision,3);
@@ -141,7 +141,7 @@ test('cloud load, later save and durable restore preserve older source metadata'
   c.messages.push({id:'answer',role:'assistant',content:'An older answer [1].',state:'complete',docsSources:sources});
   let saved:Record<string,unknown>|undefined;
   const {store,storage}=harness(async(name,args)=>{
-    if(name==='get_chat_history') return {data:{payload:cloudPayload(c),revision:1,totalMessages:2,updatedAt:c.updatedAt},error:null};
+    if(name==='get_chat_history_v2') return {data:{payload:cloudPayload(c),revision:1,totalMessages:2,updatedAt:c.updatedAt},error:null};
     if(name==='save_chat') {saved=args; return {data:{status:'saved',revision:2,evicted:[],usage},error:null};}
     return {data:usage,error:null};
   });
@@ -179,7 +179,7 @@ test('retired cloud summaries and unsupported assistant metadata in later pages 
   let pages = 0;
   const { store } = harness(async name => {
     if (name === 'list_chat_history') return { data: [retired, { ...supported, revision: 1 }], error: null };
-    if (name !== 'get_chat_history') return { data: usage, error: null };
+    if (name !== 'get_chat_history_v2') return { data: usage, error: null };
     pages++;
     const messages = pages === 1 ? [{ id: 'u', role: 'user', content: 'question' }]
       : [{ id: 'a', role: 'assistant', content: 'retired answer', state: 'complete', model: '4bit' }];
@@ -188,4 +188,18 @@ test('retired cloud summaries and unsupported assistant metadata in later pages 
   await store.refresh(); assert.deepEqual([...store.entries.keys()], [supported.id]);
   assert.equal(await store.load(supported.id), null); assert.equal(pages, 2);
   assert.equal(store.entries.size, 0); store.dispose();
+});
+
+test('a rejected later history page cannot merge an earlier partial page into the workspace', async () => {
+  const c = chat(); let pages = 0;
+  const { store, events } = harness(async name => {
+    assert.equal(name,'get_chat_history_v2'); pages++;
+    if (pages === 2) return { data: null, error: { message: 'Reload Kiddo Chat to open reference-image edits' } };
+    return { data: { payload: { title: c.title, messages: [{ id: 'u',role: 'user',content: 'first page' }] }, revision: 1,totalMessages: 2,updatedAt: 1 },error: null };
+  });
+  store.entries.set(c.id,{ ...snapshot(c),loaded: false,chat: { ...c,messages: [] } });
+  await assert.rejects(store.load(c.id),/load this conversation/);
+  assert.equal(pages,2); assert.equal(events.merges.length,0);
+  assert.equal(store.entries.get(c.id)?.loaded,false); assert.deepEqual(store.entries.get(c.id)?.chat.messages,[]);
+  store.dispose();
 });

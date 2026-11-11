@@ -1,15 +1,15 @@
 export const IMAGE_STATES = ["submitting", "queued", "generating", "completed", "failed", "cancelled", "expired"] as const;
 export type ImageState = typeof IMAGE_STATES[number];
-export type GeneratedImage = { version: 1; prompt: string; requestId: string; jobId?: string; status: ImageState; cancellationRequested?: boolean; mode?: "edit"; sourceImageId?: string };
+export type GeneratedImage = { version: 1 | 2; prompt: string; requestId: string; jobId?: string; status: ImageState; cancellationRequested?: boolean; mode?: "edit"; sourceImageId?: string };
 export function parseGeneratedImage(value: unknown): GeneratedImage | undefined {
   if (!value || typeof value !== "object") return;
   const v = value as Record<string, unknown>;
-  if (v.version !== 1 || typeof v.prompt !== "string" || !v.prompt.trim() || v.prompt.length > 2000
+  if ((v.version !== 1 && v.version !== 2) || typeof v.prompt !== "string" || !v.prompt.trim() || v.prompt.length > 2000
     || typeof v.requestId !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(v.requestId)
     || !IMAGE_STATES.includes(v.status as ImageState)
     || (v.jobId !== undefined && (typeof v.jobId !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(v.jobId)))) return;
-  if (v.mode !== undefined && v.mode !== "edit") return;
-  return { version: 1, prompt: v.prompt, requestId: v.requestId, status: v.status as ImageState,
+  if ((v.version === 1 && v.mode !== undefined) || (v.version === 2 && v.mode !== "edit")) return;
+  return { version: v.version, prompt: v.prompt, requestId: v.requestId, status: v.status as ImageState,
     ...(v.mode === "edit" ? { mode: "edit", ...(typeof v.sourceImageId === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(v.sourceImageId) ? { sourceImageId: v.sourceImageId } : {}) } : {}),
     ...(typeof v.jobId === "string" ? { jobId: v.jobId } : {}), ...(v.cancellationRequested === true ? { cancellationRequested: true } : {}) };
 }

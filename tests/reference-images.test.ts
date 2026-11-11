@@ -12,10 +12,28 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ImageJobCard } from "../src/components/image-job-card";
 import { ImageReferencePreview } from "../src/components/image-reference-preview";
+import { parseGeneratedImage as legacyParseGeneratedImage } from "./fixtures/generated-image-v1";
+import { parseConversations } from "../src/lib/storage";
 
 const dataUrl = (bytes: Buffer, mime = "png") => `data:image/${mime};base64,${bytes.toString("base64")}`;
 const png = () => sharp({ create: { width: 1024, height: 1024, channels: 3, background: "#667b51" } }).png().toBuffer();
 const editCapability = { enabled: true, version: 1, maxReferenceImages: 1, mimeTypes: ["image/png", "image/jpeg"], width: 1024, height: 1024, maxImageBytes: REFERENCE_MAX_BYTES, maxRequestBytes: IMAGE_REQUEST_MAX_BYTES };
+
+test("edit metadata uses version 2 so the deployed version-1 parser cannot reinterpret its instruction", () => {
+  const edit = { version: 2 as const, prompt: "make it blue", requestId: "edit", status: "completed" as const, mode: "edit" as const, sourceImageId: "source-message" };
+  assert.equal(legacyParseGeneratedImage(edit),undefined);
+  assert.deepEqual(parseGeneratedImage(edit),edit);
+  const text = { version: 1 as const, prompt: "blue tree", requestId: "text", status: "completed" as const };
+  assert.deepEqual(legacyParseGeneratedImage(text),text); assert.deepEqual(parseGeneratedImage(text),text);
+  assert.equal(parseGeneratedImage({ ...edit, version: 1 }),undefined);
+  assert.equal(parseGeneratedImage({ ...edit, mode: "text" }),undefined);
+  assert.equal(parseGeneratedImage({ ...edit, mode: undefined }),undefined);
+  const missing = parseGeneratedImage({ ...edit, sourceImageId: undefined });
+  assert.equal(missing?.mode,"edit"); assert.equal(missing?.version,2); assert.equal(missing?.sourceImageId,undefined);
+  const chat = { id: "chat", title: "edit", updatedAt: 1, messages: [{ id: "message",role: "assistant" as const,content: "",state: "complete" as const,generatedImage: edit }] };
+  assert.deepEqual(parseConversations(JSON.stringify([chat]))[0].messages[0].generatedImage,edit);
+  assert.deepEqual(cloudPayload(chat).messages[0].generatedImage,edit);
+});
 
 test("reference preview keeps edit intent visible during preparing and missing-source states", () => {
   const render = (reference: { sourceImageId: string; dataUrl: string } | null, preparing: boolean) => renderToStaticMarkup(createElement(ImageReferencePreview, { reference, preparing, onRemove() {} }));
@@ -26,7 +44,7 @@ test("reference preview keeps edit intent visible during preparing and missing-s
 });
 
 test("an unknown edit can be explicitly replaced without bypassing known or actively tracked work", async () => {
-  const unknown = { version: 1 as const, prompt: "make it blue", requestId: "old", status: "submitting" as const, mode: "edit" as const, sourceImageId: "source-message" };
+  const unknown = { version: 2 as const, prompt: "make it blue", requestId: "old", status: "submitting" as const, mode: "edit" as const, sourceImageId: "source-message" };
   assert.equal(mayStartImageRequest([unknown],false),true);
   assert.equal(mayStartImageRequest([unknown],true),false);
   assert.equal(mayStartImageRequest([{ ...unknown, jobId: "known" }],false),false);
@@ -51,7 +69,7 @@ test("reference decoder validates actual PNG/JPEG pixels and rejects bad MIME, d
 });
 
 test("edit requests never downgrade to text-only or automatically POST without a known job", async () => {
-  const image = { version: 1 as const, prompt: "make it blue", requestId: "edit-request", status: "submitting" as const, mode: "edit" as const, sourceImageId: "source-message" };
+  const image = { version: 2 as const, prompt: "make it blue", requestId: "edit-request", status: "submitting" as const, mode: "edit" as const, sourceImageId: "source-message" };
   let calls = 0, sent: Record<string, unknown> | undefined;
   const transport: typeof fetch = async (_url, init) => { calls++; sent = JSON.parse(String(init?.body ?? "{}")); return Response.json({ jobId: "new-job", status: "generating", kind: "edit" }); };
   const signal = new AbortController().signal, reference = dataUrl(await png());
@@ -64,7 +82,7 @@ test("edit requests never downgrade to text-only or automatically POST without a
 });
 
 test("edit provenance survives metadata while reference bytes are excluded; invalid provenance retains edit intent", () => {
-  const generatedImage = { version: 1 as const, prompt: "make it blue", requestId: "edit-request", status: "completed" as const, mode: "edit" as const, sourceImageId: "source-message", referenceImage: "private bytes" };
+  const generatedImage = { version: 2 as const, prompt: "make it blue", requestId: "edit-request", status: "completed" as const, mode: "edit" as const, sourceImageId: "source-message", referenceImage: "private bytes" };
   const metadata = cloudPayload({ id: "chat", title: "edit", updatedAt: 1, messages: [{ id: "edit-message", role: "assistant", content: "", state: "complete", generatedImage }] }).messages[0].generatedImage;
   assert.equal(metadata?.mode, "edit"); assert.equal(metadata?.sourceImageId,"source-message");
   assert.doesNotMatch(JSON.stringify(metadata), /private bytes|referenceImage/);

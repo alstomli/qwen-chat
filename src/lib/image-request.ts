@@ -5,6 +5,7 @@ import type { GeneratedImage } from "./generated-image";
 export async function requestImageJob(image: GeneratedImage, explicitSubmission: boolean, signal: AbortSignal, fetcher: typeof fetch = fetch, referenceImage?: string): Promise<Response | null> {
   if (image.jobId) return fetcher(`/api/images/${image.jobId}`, { cache: "no-store", signal });
   if (!explicitSubmission) return null;
+  if ((image.version === 2 && image.mode !== "edit") || (image.version === 1 && image.mode === "edit")) throw new Error("Invalid edit metadata. Start a new edit from its saved image.");
   if (image.mode === "edit" && !referenceImage) throw new Error("The original reference is no longer in memory. Start a new edit from its saved image.");
   if (image.mode !== "edit" && referenceImage) throw new Error("A reference image requires an explicit edit request.");
   const body = JSON.stringify({ prompt: image.prompt, ...(referenceImage ? { referenceImage } : {}) });
