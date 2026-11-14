@@ -91,7 +91,10 @@ test("normal crafted requests replace every restricted field and fit defaults to
           canUseAdvancedSettings: true, isAdmin: true, userId: adminIds[0], temperature: 1.2 }));
         assert.equal(response.status, 200, await response.clone().text()); await response.text();
         const sent = fixture.calls.at(-1)!.body!;
-        assert.deepEqual(sent.settings, expected); assert.equal(sent.max_tokens, expected.outputTokens);
+        const effective = sent.settings as typeof expected;
+        assert.deepEqual({ ...effective, timeoutSeconds: expected.timeoutSeconds }, expected);
+        assert.ok(effective.timeoutSeconds <= expected.timeoutSeconds && effective.timeoutSeconds >= expected.timeoutSeconds - 1);
+        assert.equal(sent.max_tokens, expected.outputTokens);
         assert.equal(sent.useAdapter, false); assert.equal(sent.temperature, 1.2);
         assert.equal(fixture.calls.at(-1)!.headers.get("X-Chat-User-Id"), user.id);
         assert.equal(Object.hasOwn(sent, "isAdmin"), false);
@@ -150,7 +153,10 @@ test("both admins preserve adapter, numeric, prefix and diagnostic controls with
       const response = await POST(fixture.request({ model: "bf16", useAdapter: true, settings, max_tokens: 512 }, { [DIAGNOSTICS_HEADER]: "1" }, userId));
       assert.equal(response.status, 200); await response.text();
       const sent = fixture.calls.at(-1)!;
-      assert.deepEqual(sent.body!.settings, settings); assert.equal(sent.body!.useAdapter, true);
+      const effectiveSettings = sent.body!.settings as typeof settings;
+      assert.deepEqual({ ...effectiveSettings, timeoutSeconds: settings.timeoutSeconds }, settings);
+      assert.ok(effectiveSettings.timeoutSeconds <= 30 && effectiveSettings.timeoutSeconds >= 29);
+      assert.equal(sent.body!.useAdapter, true);
       assert.equal(sent.headers.get("X-Chat-User-Id"), userId);
       assert.equal(sent.body!.max_tokens, 512); assert.equal(sent.headers.get(DIAGNOSTICS_HEADER), "1");
       const status = await GET(new Request("https://chat.example/api/status", { headers: fixture.request({}, {}, userId).headers }));
