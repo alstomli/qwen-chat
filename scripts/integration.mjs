@@ -58,7 +58,7 @@ try {
   await waitFor('http://127.0.0.1:18001/health', { Authorization: 'Bearer ' + token });
   server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'dev', ...(process.env.CHAT_TEST_WEBPACK === 'true' ? ['--webpack'] : []), '--hostname', '127.0.0.1', '--port', '3002'], {
     cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NODE_ENV: 'development', NEXT_TELEMETRY_DISABLED: '1', CHAT_DIAGNOSTICS_ENABLED: 'true', CHAT_TEST_DIST_DIR: '.next-integration', NEXT_PUBLIC_SUPABASE_URL: authFixture.url, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "fixture-public-key", CHAT_PREVIEW_MODE: 'false',
-      RUNPOD_BF16_CHAT_URL: 'http://127.0.0.1:18001', RUNPOD_BF16_CHAT_TOKEN: token, RUNPOD_IMAGE_API_KEY: '' },
+      RUNPOD_BF16_CHAT_URL: 'http://127.0.0.1:18001', RUNPOD_BF16_CHAT_TOKEN: token, FLUX_IMAGE_API_URL: '', FLUX_IMAGE_API_KEY: '' },
   });
   server.stdout.on('data', chunk => logs += chunk); server.stderr.on('data', chunk => logs += chunk);
   await waitFor(base);
@@ -80,6 +80,9 @@ try {
   assert.equal(status.mode, 'live'); assert.equal(status.ready, true);
   assert.equal(status.limits.contextTokens, 40960);
   assert.equal(status.diagnosticsAvailable, true);
+  const imageStatus = await fetch(base + '/api/images', { headers: { Cookie: cookie } });
+  assert.equal(imageStatus.status, 503);
+  assert.equal((await imageStatus.json()).error.message, 'Image generation has not been configured.');
   console.log('PASS: Supabase HTTP session fixture, retired shared login, origin protection, and gateway health');
   if (process.env.CHAT_TEST_BROWSER_QUOTAS_ONLY === 'true') {
     assert.ok(process.env.CHAT_TEST_PLAYWRIGHT, 'Set CHAT_TEST_PLAYWRIGHT for browser quota checks');

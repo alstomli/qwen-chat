@@ -1,6 +1,6 @@
 # FLUX.2 dev generation
 
-Accepted November 10, 2026 for the administrator preview.
+Accepted November 10, 2026 for the administrator preview. The original text-to-image scope below is historical; the reference-editing extension later in this decision defines the additional supported flow. See [current behavior and operations](image-generation.md).
 
 Image generation uses a dedicated authenticated backend, separate from Qwen chat and image understanding. The Next.js server verifies the Google account and active session, applies the existing administrator allowlist, and supplies the verified account UUID with a server-only backend credential. Browser headers and body fields never establish backend identity. The backend enforces ownership, one active generation, daily starts and temporary-result retention.
 
@@ -10,7 +10,7 @@ Submissions use a stable idempotency key within the lifetime of the backend proc
 
 Cancellation is cooperative. The UI distinguishes a requested cancellation from confirmed cancellation and permits completion to win after backend artifact persistence. Deleting a conversation requests cancellation of known unfinished jobs and aborts local image work before deleting its blobs. Backend TTL controls abandoned or unknown jobs.
 
-The UI offers separate Chat and Create image modes. Only an explicit text prompt goes to FLUX; Qwen attachments and conversation context are excluded. This release uses one 1024 × 1024 PNG, 28 steps, guidance 4, twenty account starts per day and a 24-hour maximum terminal-result TTL. At the user's request there is no waiting queue or SQLite database: additional requests receive busy responses, and temporary status, idempotency and usage records reset on service restart. Known job IDs from a previous service process become unavailable rather than being silently regenerated. An additive SQL migration extends the existing cloud history whitelist; rollout must apply it before frontend activation, after the web-search metadata migration that installs `public.clean_web_search_metadata(jsonb)`. A transactional preflight rejects a missing prerequisite before replacing the existing history cleaner.
+The UI offers separate Chat and Create image modes. In the original text-to-image flow, only an explicit text prompt goes to FLUX; Qwen attachments and conversation context are excluded. This release uses one 1024 × 1024 PNG, 28 steps, guidance 4, twenty account starts per day and a 24-hour maximum terminal-result TTL. At the user's request there is no waiting queue or SQLite database: additional requests receive busy responses, and temporary status, idempotency and usage records reset on service restart. Known job IDs from a previous service process become unavailable rather than being silently regenerated. An additive SQL migration extends the existing cloud history whitelist; rollout must apply it before frontend activation, after the web-search metadata migration that installs `public.clean_web_search_metadata(jsonb)`. A transactional preflight rejects a missing prerequisite before replacing the existing history cleaner.
 
 
 ## Reference editing extension
