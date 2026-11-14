@@ -1,3 +1,4 @@
+import { RequestDeadline } from "@/lib/request-deadline";
 import { requestPrincipal, sameOrigin } from "@/lib/auth";
 import { connectionConfig, gatewayCapabilities, GatewayCompatibilityError, diagnosticsAllowed, jsonError, readJson } from "@/lib/server";
 import { DIAGNOSTICS_HEADER, parseDiagnosticHeader } from "@/lib/diagnostics";
@@ -12,23 +13,36 @@ export const dynamic = "force-dynamic";
 const streamHeaders = { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no" };
 
 export async function POST(request: Request) {
-  const startedAt = Date.now();
-  const principal = await requestPrincipal(request);
+  const deadline = new RequestDeadline(request.signal, process.env.VERCEL === "1");
+  try {
+    const response = await handle(request, deadline);
+    if (!response.headers.get("Content-Type")?.startsWith("text/event-stream")) deadline.finish();
+    return response;
+  } catch {
+    deadline.finish();
+    if (deadline.timedOut) return jsonError("Your request timed out while waiting for the model to start a reply. Please try again.", 504);
+    if (deadline.signal.aborted) return jsonError("You stopped this request.", 499);
+    return jsonError("Couldn't reach your model. It may be stopped or loading. Please try again.", 503);
+  }
+}
+async function handle(request: Request, deadline: RequestDeadline) {
+  const principal = await deadline.run(requestPrincipal(request, deadline.signal));
   if (!principal) return jsonError("Your session expired. Sign in to continue.", 401);
   if (!sameOrigin(request)) return jsonError("This request isn't allowed.", 403);
   const diagnosticRequested = request.headers.get(DIAGNOSTICS_HEADER) === "1";
   if (diagnosticRequested && (!principal.canUseAdvancedSettings || !diagnosticsAllowed())) return jsonError("Request diagnostics are disabled.", 403);
   let input;
   try {
-    const value = await readJson(request, value => {
+    const value = await deadline.run(readJson(request, value => {
       const effective = inputForAccess(value, principal.canUseAdvancedSettings);
       return validateSettings(effective && typeof effective === "object"
         ? (effective as Record<string, unknown>).settings : undefined).requestBytes;
-    });
+    }, deadline.signal));
     input = validateInput(inputForAccess(value, principal.canUseAdvancedSettings));
   }
-  catch (error) { return jsonError(error instanceof Error ? error.message : "Invalid message.", 400); }
-  if (request.signal.aborted) return jsonError("You stopped this request.", 499);
+  catch (error) { if (deadline.signal.aborted) throw error; return jsonError(error instanceof Error ? error.message : "Invalid message.", 400); }
+  if (deadline.signal.aborted) throw deadline.signal.reason;
+  deadline.limit(Math.min(input.settings.timeoutSeconds * 1000, input.webSearch ? WEB_SEARCH_TIMEOUT_MS : Infinity));
   try {
     const { model } = input;
     const config = connectionConfig(model);
@@ -42,23 +56,23 @@ export async function POST(request: Request) {
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
           const send = () => {
-            if (request.signal.aborted) { controller.close(); return; }
+            if (deadline.signal.aborted) { deadline.finish(); controller.close(); return; }
             if (index < words.length) {
               controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: words[index++] } }] })}\n\n`));
               timer = setTimeout(send, 35);
             } else {
               controller.enqueue(encoder.encode('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'));
-              controller.close();
+              deadline.finish(); controller.close();
             }
           }; send();
-        }, cancel() { clearTimeout(timer); }
+        }, cancel() { clearTimeout(timer); deadline.abort(); deadline.finish(); }
       });
       return new Response(stream, { headers: { ...streamHeaders, "X-Chat-Mode": "preview" } });
     }
     let settings;
     try {
-      const capabilities = await gatewayCapabilities(config);
-      if (request.signal.aborted) return jsonError("You stopped this request.", 499);
+      const capabilities = await deadline.run(gatewayCapabilities(config, deadline.signal));
+      if (deadline.signal.aborted) throw deadline.signal.reason;
       // Defaults must be fitted to this gateway before checking or forwarding a normal request.
       input = validateInput(inputForAccess(input, principal.canUseAdvancedSettings, capabilities.limits));
       if (input.webSearch && !webSearchForProfile(capabilities, model, input.useAdapter)) return jsonError(WEB_SEARCH_UNAVAILABLE, 503);
@@ -70,40 +84,32 @@ export async function POST(request: Request) {
       if (input.useAdapter !== undefined && !capabilities.adapterToggleAvailable)
         return jsonError("Adapter selection is unavailable for this connection.", 503);
       if (diagnosticRequested && capabilities.diagnosticsVersion !== 1) return jsonError("Enable diagnostics on an updated gateway first.", 503);
-      settings = gatewaySettings(input.settings, capabilities.limits);
+      settings = gatewaySettings({ ...input.settings, timeoutSeconds: Math.min(input.settings.timeoutSeconds, capabilities.limits.timeoutSeconds) }, capabilities.limits);
+      deadline.limit(Math.min(settings.timeoutSeconds * 1000, input.webSearch ? WEB_SEARCH_TIMEOUT_MS : Infinity));
     }
-    catch (error) { return jsonError(error instanceof Error ? error.message : "Gateway settings unavailable.", error instanceof GatewayCompatibilityError ? 503 : 400); }
+    catch (error) { if (deadline.signal.aborted) throw error; return jsonError(error instanceof Error ? error.message : "Gateway settings unavailable.", error instanceof GatewayCompatibilityError ? 503 : 400); }
     const { model: _model, ...gatewayInput } = input;
+    settings = { ...settings, timeoutSeconds: Math.min(settings.timeoutSeconds, deadline.remainingSeconds()) };
     const body = JSON.stringify({ ...gatewayInput, settings, stream: true });
-    const controller = new AbortController();
-    let timedOut = false;
-    const cancel = () => controller.abort();
-    request.signal.addEventListener("abort", cancel, { once: true });
-    if (request.signal.aborted) cancel();
-    const timeoutMs = input.webSearch ? Math.max(1, Math.min(WEB_SEARCH_TIMEOUT_MS, input.settings.timeoutSeconds * 1000) - (Date.now() - startedAt))
-      : input.settings.timeoutSeconds * 1000;
-    const timer = setTimeout(() => { timedOut = true; cancel(); }, timeoutMs);
-    if (controller.signal.aborted) {
-      clearTimeout(timer); request.signal.removeEventListener("abort", cancel);
-      return jsonError("You stopped this request.", 499);
-    }
+    const controller = deadline.controller;
+    const cancel = () => deadline.abort();
     let upstream: Response;
     try {
-      upstream = await fetch(config.base + "/v1/chat/completions", {
+      upstream = await deadline.run(fetch(config.base + "/v1/chat/completions", {
         method: "POST", headers: { Authorization: "Bearer " + config.token, "X-Chat-User-Id": principal.userId, "Content-Type": "application/json", ...(diagnosticRequested ? { [DIAGNOSTICS_HEADER]: "1" } : {}) },
         body, signal: controller.signal, cache: "no-store"
-      });
+      }));
     } catch (error) {
-      clearTimeout(timer); request.signal.removeEventListener("abort", cancel);
-      if (timedOut) return jsonError("Your request timed out while waiting for the model to start a reply. Please try again.", 504);
+      deadline.finish();
+      if (deadline.timedOut) return jsonError("Your request timed out while waiting for the model to start a reply. Please try again.", 504);
       throw error;
     }
     const imageVerified = !input.image || upstream.headers.get(IMAGE_ACCEPTED_HEADER) === "true";
     const adapterVerified = input.useAdapter === undefined || upstream.headers.get("X-Chat-Adapter-Enabled") === String(input.useAdapter);
     const searchVerified = !input.webSearch || upstream.headers.get(WEB_SEARCH_HEADER) === "1";
     if (upstream.ok && (!imageVerified || !adapterVerified || !searchVerified)) {
-      clearTimeout(timer); request.signal.removeEventListener("abort", cancel);
-      await upstream.body?.cancel(); controller.abort();
+      deadline.finish();
+      controller.abort(); void upstream.body?.cancel().catch(() => {});
       return jsonError(!searchVerified ? "The model did not confirm web search. No web-backed answer was produced."
         : !imageVerified ? "The model did not confirm receipt of the attached image."
         : "The selected adapter mode could not be verified.", 503);
@@ -111,7 +117,7 @@ export async function POST(request: Request) {
     const diagnostic = diagnosticRequested ? parseDiagnosticHeader(upstream.headers.get(DIAGNOSTICS_HEADER)) : null;
     const diagnosticHeaders: Record<string, string> = diagnostic ? { [DIAGNOSTICS_HEADER]: JSON.stringify(diagnostic) } : {};
     if (!upstream.ok || !upstream.body) {
-      clearTimeout(timer); request.signal.removeEventListener("abort", cancel);
+      deadline.finish();
       let message = "Your model is unavailable or still loading. Try again shortly.";
       if (upstream.status === 429) message = "Your model is answering another request. Try again in a moment.";
       const upstreamRejection = upstream.headers.get("X-Chat-Rejection");
@@ -138,7 +144,7 @@ export async function POST(request: Request) {
         message = "The model account limits could not be verified. Please try again shortly.";
       if (input.webSearch && rejection?.startsWith("web_")) message = rejection === "web_incompatible"
         ? "Use web search and image attachments in separate messages." : "Web search could not finish. No web-backed answer was produced. Please retry.";
-      await upstream.body?.cancel();
+      controller.abort(); void upstream.body?.cancel().catch(() => {});
       const response = jsonError(message, upstream.status === 400 && rejection === "user_identity" ? 503 : [400, 413, 429].includes(upstream.status) || (upstream.status === 504 && rejection === "queue_timeout") ? upstream.status : 503);
       if (upstream.status === 429 && rejection !== null && ["queue_full", "rate_limit", "user_capacity", "user_rate_limit"].includes(rejection))
         response.headers.set("X-Chat-Rejection", rejection);
@@ -147,14 +153,14 @@ export async function POST(request: Request) {
       return response;
     }
     const reader = (input.webSearch ? validatedWebStream(upstream.body) : upstream.body).getReader();
-    const finish = () => { clearTimeout(timer); request.signal.removeEventListener("abort", cancel); };
+    const finish = () => { deadline.finish(); };
     const stream = new ReadableStream<Uint8Array>({
       async pull(controller) {
         try {
-          const { value, done } = await reader.read();
+          const { value, done } = await deadline.run(reader.read());
           if (done) { finish(); controller.close(); } else controller.enqueue(value);
-        } catch (error) { finish(); controller.error(error); }
-      }, async cancel() { cancel(); finish(); await reader.cancel().catch(() => {}); }
+        } catch (error) { cancel(); finish(); void reader.cancel(error).catch(() => {}); controller.error(error); }
+      }, cancel() { cancel(); finish(); void reader.cancel().catch(() => {}); }
     });
     const upstreamTrimmed = upstream.headers.get("X-Context-Trimmed") ?? "0";
     return new Response(stream, { headers: { ...streamHeaders, ...diagnosticHeaders,
@@ -162,7 +168,7 @@ export async function POST(request: Request) {
       ...(input.image ? { [IMAGE_ACCEPTED_HEADER]: "true" } : {}),
       ...(input.webSearch ? { [WEB_SEARCH_HEADER]: "1" } : {}),
       "X-Context-Trimmed": upstreamTrimmed } });
-  } catch { return jsonError("Couldn't reach your model. It may be stopped or loading. Please try again.", 503); }
+  } catch (error) { if (deadline.signal.aborted) throw error; return jsonError("Couldn't reach your model. It may be stopped or loading. Please try again.", 503); }
 }
 function previewReply(prompt: string) {
   if (/code|python|function/i.test(prompt)) return "Here's a small example to build on:\n\n```python\ndef greet(name: str) -> str:\n    return f\"Hello, {name}!\"\n\nprint(greet(\"world\"))\n```\n\nA good starting point is to make one small thing work, then add the next piece.\n\n*This is a sample reply in local preview mode. Your Runpod model is not being called.*";

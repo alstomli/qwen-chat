@@ -4,11 +4,13 @@ import { isVerifiedGoogleUser } from "./google-user";
 import { canUseAdvancedSettings } from "./settings-access";
 export type AuthenticatedPrincipal = { userId: string; canUseAdvancedSettings: boolean };
 const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export async function requestPrincipal(request: Request): Promise<AuthenticatedPrincipal | null> {
+export async function requestPrincipal(request: Request, signal?: AbortSignal): Promise<AuthenticatedPrincipal | null> {
   const config = authConfig();
   if (!config) return null;
   try {
-    const supabase = createServerClient(config.url, config.key, { cookies: {
+    const supabase = createServerClient(config.url, config.key, {
+      ...(signal ? { global: { fetch: (input: RequestInfo | URL, init?: RequestInit) => fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([signal, init.signal]) : signal }) } } : {}),
+      cookies: {
       getAll: () => (request.headers.get("cookie") ?? "").split(";").map(cookie => {
         const index = cookie.indexOf("=");
         return { name: cookie.slice(0, index).trim(), value: cookie.slice(index + 1).trim() };

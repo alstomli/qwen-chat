@@ -24,3 +24,7 @@ Start with the [manual pilot worksheet](responsiveness-pilot.md). Deploy the gat
 
 For optional real-browser assertions during `node scripts/integration.mjs`, set `CHAT_TEST_PLAYWRIGHT` to the absolute path of an installed Playwright `index.mjs`. Use its installed Chromium, or set `CHAT_TEST_BROWSER_CHANNEL=msedge` (or `chrome`) for an existing browser. The isolated headless browser signs in only to the local fake-model test app, verifies that two conversations stream together, Stop cancels only the selected reply, the other reply completes, and timing records stay with their replies. No browser package is needed for the default HTTP integration test.
 
+
+## Hosted request budget
+
+On Vercel the application deadline is 240 seconds from chat-route entry, including authentication, body validation, gateway readiness, queueing and generation. The gateway receives the remaining budget; diagnostics describe that effective budget rather than the original longer browser preference. A shorter requested timeout or web-search cap takes precedence. Local custom timeouts remain available. The platform route limit remains 300 seconds to leave cancellation/response headroom.
