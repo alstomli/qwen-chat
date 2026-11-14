@@ -1,12 +1,25 @@
 # Cloud history release and operations
 
-This is a preparation runbook, not evidence of a hosted migration or deployment.
-Migration `202611080001_accounts.sql` is already hosted; apply only the additive
-`202611080002_cloud_history.sql` for this release. See the
-[accepted design](adr-cloud-history.md) and [account setup](accounts.md).
-Do not merge to `main` to test: the linked production deployment follows `main`.
-Production migration, scheduler installation, merge, and deployment are separate
-release actions and require the user's existing release approval policy.
+This runbook describes the current source requirements; it does not establish which migrations are installed in any hosted project. See the [accepted design](adr-cloud-history.md), [account setup](accounts.md), and [image operations](image-generation.md).
+
+## Migration order
+
+Apply missing reviewed migrations in filename order, checking the target's migration records and actual schema first. Fresh installations need all eight; existing installations need only their unapplied suffix. Do not replay fresh-install SQL or assume an earlier release's hosted state.
+
+| Order | Migration | Purpose |
+| --- | --- | --- |
+| 1 | `202611080001_accounts.sql` | Google accounts and live-session controls |
+| 2 | `202611080002_cloud_history.sql` | Account-scoped history, retention and storage guard |
+| 3 | `202611100001_web_search_metadata.sql` | Bounded citations and web-search cleaner |
+| 4 | `202611100002_bf16_only.sql` | BF16-only history writes |
+| 5 | `202611110001_generated_images.sql` | Generated-image metadata; requires the web-search cleaner |
+| 6 | `202611110002_reference_image_metadata.sql` | Version-2 reference-edit metadata |
+| 7 | `202611110003_versioned_image_history_reads.sql` | `get_chat_history_v2`; protects edits from older readers |
+| 8 | `202611110004_versioned_image_history_writes.sql` | `save_chat_v2`; protects edits from older writers |
+
+Migration files live in [supabase/migrations](../supabase/migrations). The current client requires the versioned read/write RPCs before activation. Keep the legacy guards: older open tabs must receive reload/conflict responses rather than strip edit intent. New client and legacy operations share session, ownership, revision and quota protections.
+
+Do not merge to `main` to test: the linked production deployment follows `main`. Hosted migrations, scheduler installation, merge and deployment are separate release actions. Local checks do not perform them.
 
 ## Limits and the physical guard
 
@@ -69,14 +82,14 @@ The guard does not configure database-wide read-only mode or disable Auth.
 1. Record the approved source commit, current deployment ID, target project ref,
    Supabase plan, and current organization billing-cycle dates. Confirm this is the
    existing Google-only account project, not another database.
-2. Confirm migration 001 exists in the deployed schema and compare its functions,
-   triggers, and profile policies. Do not replay 001. Confirm none of the 002
-   objects already exists; partial/manual prior installs require investigation.
+2. Compare recorded migrations and actual functions, triggers and policies with
+   the ordered chain above. Investigate partial/manual installs before proceeding.
+   Do not replay already-applied migrations. For a fresh install begin with 001.
 3. Run the read-only SQL below in the intended project's SQL editor as owner.
    Stop if the database is already at the warning threshold, the account counter
    would begin above 100, permissions differ, or existing triggers conflict.
 4. Export a protected logical backup and record its timestamp and restore steps
-   before applying 002. Validate the backup in a disposable database. Do not place
+   before applying any missing migrations. Validate the backup in a disposable database. Do not place
    backups in this repository or a public artifact. Supabase recommends off-site
    CLI exports for Free projects; [automatic daily backups and PITR are not Free
    guarantees](https://supabase.com/docs/guides/platform/backups). Backups consume
@@ -94,17 +107,21 @@ select current_database(), current_user, version(),
 select count(*) as registered_accounts from auth.users;
 select to_regclass('public.profiles') as profiles,
        to_regprocedure('public.chat_session_active()') as session_check,
-       to_regclass('public.chat_history') as must_be_null_before_002;
+       to_regclass('public.chat_history') as history_table,
+       to_regclass('public.chat_storage_guard') as storage_guard;
+select proname, pg_get_function_identity_arguments(oid) as arguments
+from pg_proc where pronamespace = 'public'::regnamespace
+  and proname in ('get_chat_history_v2', 'save_chat_v2');
 select tgname, pg_get_triggerdef(oid)
 from pg_trigger where tgrelid = 'auth.users'::regclass and not tgisinternal;
 select name, default_version, installed_version
 from pg_available_extensions where name = 'pg_cron';
 ```
 
-Apply the reviewed 002 SQL once using the approved migration path. It is
-transactional and briefly locks `auth.users` while initializing the account
-counter; schedule a quiet window and retry after investigation if a lock timeout
-or any statement fails. Record completion and refresh PostgREST's schema cache
+Apply only missing reviewed SQL in the order above using the approved migration
+path. Migration 002 briefly locks `auth.users` while initializing the account
+counter; later migrations replace history functions. Schedule a quiet window and
+investigate any lock timeout or failed statement before retrying. Record completion and refresh PostgREST's schema cache
 through the normal Supabase migration mechanism before verifying RPC availability.
 Do not cut over the app while RPCs return schema-cache errors.
 
@@ -216,9 +233,8 @@ credentials, and the removed document index. Verification rejects changed,
 missing, additional, or symlink files. Review tracked contents as well; the
 credential scan is not a universal secret detector. Package preparation does not
 install, build, upload, or deploy. Inject server secrets through the hosting
-platform. Keep the existing database schema and deployed migrations unchanged
-when removing the document-search feature; legacy message metadata remains
-available for a future source integration.
+platform. Packaging does not modify the database or replay migrations. Legacy message
+metadata remains readable for compatibility.
 
 ## Local PostgreSQL verification
 
