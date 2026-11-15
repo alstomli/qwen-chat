@@ -75,7 +75,9 @@ async function handle(request: Request, deadline: RequestDeadline) {
       if (deadline.signal.aborted) throw deadline.signal.reason;
       // Defaults must be fitted to this gateway before checking or forwarding a normal request.
       input = validateInput(inputForAccess(input, principal.canUseAdvancedSettings, capabilities.limits));
-      if (input.webSearch && !webSearchForProfile(capabilities, model, input.useAdapter)) return jsonError(WEB_SEARCH_UNAVAILABLE, 503);
+      // The route enables tools for eligible text; the model decides whether to use them.
+      input.webSearch = !input.image && webSearchForProfile(capabilities, model, input.useAdapter)
+        ? { version: 1, mode: "auto" } : undefined;
       if (input.image) {
         if (!capabilities.imageInput) return jsonError(IMAGE_UNSUPPORTED_ERROR, 400);
         if (capabilities.adapterToggleAvailable && input.useAdapter !== false) return jsonError(IMAGE_ADAPTER_ERROR, 400);

@@ -33,20 +33,20 @@ test("hosted status and forwarding agree on the cap, counting auth and readiness
   const env = { ...process.env }, fetcher = globalThis.fetch; let now = 0;
   try {
     configure(); t.mock.method(performance, "now", () => now);
-    let forwarded = 0;
+    let forwarded = 0, webAvailable = true;
     globalThis.fetch = async (input, init) => {
       const auth = authResponse(input, init, { userId: adminIds[0] });
       if (auth) { now += 1000; return auth; }
-      if (String(input).endsWith("/health")) { now += 1000; return Response.json(health); }
+      if (String(input).endsWith("/health")) { now += 1000; return Response.json({ ...health, webSearch: { models: [{ useAdapter: false, available: webAvailable }] } }); }
       forwarded = JSON.parse(String(init?.body)).settings.timeoutSeconds;
-      return new Response("data: [DONE]\n\n", { headers: { "X-Chat-Adapter-Enabled": "false" } });
+      return new Response(webAvailable ? 'event: web-complete\ndata: {"version":1,"runId":"direct","sequence":1,"outcome":"completed"}\n\ndata: [DONE]\n\n' : "data: [DONE]\n\n", { headers: { "X-Chat-Adapter-Enabled": "false", ...(webAvailable ? { "X-Chat-Web-Search": "1" } : {}) } });
     };
     const response = await POST(request()); assert.equal(response.status, 200); await response.text();
     assert.equal(forwarded, 237);
     const status = await GET(new Request("https://chat.example/api/status", { headers: request().headers }));
     assert.equal((await status.json()).limits.timeoutSeconds, 240);
     now = 0; const shorter = await POST(request(5)); assert.equal(shorter.status, 200); await shorter.text(); assert.equal(forwarded, 2);
-    delete process.env.VERCEL; now = 0; const local = await POST(request(900)); assert.equal(local.status, 200); await local.text(); assert.equal(forwarded, 897);
+    delete process.env.VERCEL; webAvailable = false; now = 0; const local = await POST(request(900)); assert.equal(local.status, 200); await local.text(); assert.equal(forwarded, 897);
   } finally { process.env = env; globalThis.fetch = fetcher; }
 });
 
@@ -86,7 +86,7 @@ test("client cancellation reaches readiness, and stream deadline cancels the ups
       const auth = authResponse(input, init, { userId: adminIds[0] }); if (auth) return auth;
       if (String(input).endsWith("/health")) return Response.json(health);
       upstreamSignal = init?.signal ?? undefined;
-      return new Response(new ReadableStream<Uint8Array>({ cancel() { cancelled = true; } }), { headers: { "X-Chat-Adapter-Enabled": "false" } });
+      return new Response(new ReadableStream<Uint8Array>({ cancel() { cancelled = true; } }), { headers: { "X-Chat-Adapter-Enabled": "false", "X-Chat-Web-Search": "1" } });
     };
     const response = await POST(request()); const reading = response.text();
     t.mock.timers.tick(HOSTED_CHAT_TIMEOUT_MS); await assert.rejects(reading);
@@ -122,7 +122,7 @@ test("one-second requests reach upstream but a fractional remainder never resets
       const auth = authResponse(input, init, { userId: adminIds[0] }); if (auth) { now += 100; return auth; }
       if (String(input).endsWith("/health")) { now += 100; return Response.json(health); }
       forwarded = JSON.parse(String(init?.body)).settings.timeoutSeconds; upstreamSignal = init?.signal ?? undefined;
-      return new Response(new ReadableStream<Uint8Array>({ cancel() { cancelled = true; } }), { headers: { "X-Chat-Adapter-Enabled": "false" } });
+      return new Response(new ReadableStream<Uint8Array>({ cancel() { cancelled = true; } }), { headers: { "X-Chat-Adapter-Enabled": "false", "X-Chat-Web-Search": "1" } });
     };
     const response = await POST(request(1)); assert.equal(response.status, 200); assert.equal(forwarded, 1); assert.equal(now, 300);
     const reading = response.text(); t.mock.timers.tick(699); assert.equal(upstreamSignal!.aborted, false);

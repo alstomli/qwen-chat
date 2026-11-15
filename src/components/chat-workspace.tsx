@@ -61,7 +61,6 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   const [activeId, setActiveId] = useState<string | null>(null); const [draft, setDraft] = useState(""); const [search, setSearch] = useState("");
   const [attachment, setAttachment] = useState<ImageAttachment | null>(null);
   const [readingImage, setReadingImage] = useState(false);
-  const [searchWeb, setSearchWeb] = useState(false);
   const [webStatuses, setWebStatuses] = useState<Record<string, WebStatus>>({});
   const [retryImageId, setRetryImageId] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -106,9 +105,9 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   const imageUnavailable = !imageInput ? "Image attachments require a connected BF16 gateway with image input enabled."
     : !canUseAdvancedSettings && !adapterAvailable ? "Reconnect BF16 to a gateway that can verify base model mode before attaching an image."
     : adapterAvailable && selectedAdapter ? IMAGE_ADAPTER_ERROR : "";
-  const attachmentUnavailable = searchWeb ? "Turn off Search web before attaching an image." : imageUnavailable;
+  const attachmentUnavailable = imageUnavailable;
   const webAvailable = webSearchForProfile(connection, selectedModel, effectiveAdapter);
-  const webUnavailable = !webAvailable ? WEB_SEARCH_UNAVAILABLE : attachment ? "Remove the image to search the web." : "";
+  const webUnavailable = attachment ? "Web search is unavailable for image messages." : !webAvailable ? WEB_SEARCH_UNAVAILABLE : "";
 
   useEffect(() => {
     if (!authenticated) return;
@@ -171,7 +170,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
 
   function clearDraft() {
     removeAttachment();
-    setDraft(""); setRetryImageId(null); setSearchWeb(false);
+    setDraft(""); setRetryImageId(null);
   }
   function removeAttachment() {
     imageRead.current++;
@@ -187,7 +186,6 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
       const pending = savedDrafts.current.get(id);
       savedDrafts.current.delete(id);
       setActiveId(id);
-      setSearchWeb(false);
       setDraft(pending?.text ?? "");
       setAttachment(pending?.attachment ?? null);
       setRetryImageId(pending?.retryId ?? null);
@@ -232,12 +230,11 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   function updateMessage(chatId: string, messageId: string, patch: Partial<Message> | ((m: Message) => Partial<Message>)) {
     setChats(prev => prev.map(chat => chat.id !== chatId ? chat : { ...chat, messages: chat.messages.map(m => m.id === messageId ? { ...m, ...(typeof patch === "function" ? patch(m) : patch) } : m) }));
   }
-  async function send(text = draft, retryId: string | null = retryImageId, image = attachment, searchRequested = searchWeb) {
+  async function send(text = draft, retryId: string | null = retryImageId, image = attachment) {
     const submitted = performance.now();
     text = text.trim(); if (!text || (activeId && controllers.current.has(activeId))) return;
     if (activeId && cloud?.entries.get(activeId)?.loaded === false) { setToast("Load this conversation before adding a message."); return; }
     if (!connection.ready || !connection.limits) { setToast(connection.error ?? "Wait for the server limits to be verified before sending."); return; }
-    if (searchRequested && (!webAvailable || image)) { setToast(image ? "Use web search and image attachments in separate messages." : WEB_SEARCH_UNAVAILABLE); return; }
     if (selectedModel === "bf16" && selectedAdapter === false && !adapterAvailable && !preview) { setToast("Adapter selection is unavailable. Reconnect or start a new conversation."); return; }
     const useAdapter = effectiveAdapter;
     if (text.length > effectiveSettings.inputCharacters) { setToast(`Please shorten your message to ${effectiveSettings.inputCharacters.toLocaleString()} characters or fewer.`); return; }
@@ -253,7 +250,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
     const history = retryIndex < 0 ? messages : messages.slice(0, retryIndex);
     const id = activeId ?? uid(); const responseId = uid(); const userId = uid();
     const retainedImages = retryIndex < 0 ? [] : messages.slice(retryIndex).filter(message => message.generatedImage);
-    const pending: Message[] = [...history, ...retainedImages, { id: userId, role: "user", content: text, imageName: image?.name, searchRequested: searchRequested ? true : undefined }, { id: responseId, role: "assistant", content: "", model: selectedModel, useAdapter }];
+    const pending: Message[] = [...history, ...retainedImages, { id: userId, role: "user", content: text, imageName: image?.name }, { id: responseId, role: "assistant", content: "", model: selectedModel, useAdapter }];
     const candidates = [...completedHistory(history), { role: "user", content: text }];
     let input;
     try { input = fitMessages(candidates, effectiveSettings, temperature, selectedModel, useAdapter, image?.dataUrl); }
@@ -284,19 +281,16 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
     const abort = new AbortController();
     controllers.current.set(id, abort);
     setStreamingChats(previous => new Set(previous).add(id));
-    if (searchRequested) setWebStatuses(previous => ({ ...previous, [responseId]: "planning" }));
     textarea.current?.focus();
+    let webEnabled = false;
     let responseStarted = false;
     let contentReceived = false;
     try {
-      const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json", ...(captureDiagnostic ? { [DIAGNOSTICS_HEADER]: "1" } : {}) }, body: JSON.stringify({ model: selectedModel, useAdapter, messages: input, max_tokens: effectiveSettings.outputTokens, temperature, settings: effectiveSettings, image: image?.dataUrl, ...(searchRequested ? { webSearch: { version: 1, mode: "required" } } : {}) }), signal: abort.signal });
+      const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json", ...(captureDiagnostic ? { [DIAGNOSTICS_HEADER]: "1" } : {}) }, body: JSON.stringify({ model: selectedModel, useAdapter, messages: input, max_tokens: effectiveSettings.outputTokens, temperature, settings: effectiveSettings, image: image?.dataUrl }), signal: abort.signal });
       const gateway = captureDiagnostic ? parseDiagnosticHeader(response.headers.get(DIAGNOSTICS_HEADER)) : null;
       if (captureDiagnostic) patchDiagnostic(responseId, { gateway });
       if (!response.ok || !response.body) { if (response.status === 401) setAuthenticated(false); throw new Error((await response.json()).error ?? "Couldn't start a reply."); }
-      if (searchRequested && response.headers.get(WEB_SEARCH_HEADER) !== "1") {
-        await response.body.cancel().catch(() => {});
-        throw new Error("The model did not confirm web search. No web-backed answer was produced.");
-      }
+      webEnabled = response.headers.get(WEB_SEARCH_HEADER) === "1";
       if (image && response.headers.get(IMAGE_ACCEPTED_HEADER) !== "true") {
         await response.body.cancel().catch(() => {});
         throw new Error("The model did not confirm receipt of the attached image. Try again when image input is available.");
@@ -315,7 +309,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
         if (reason === "length") updateMessage(id, responseId, { note: "Response length reached. Ask me to continue for more." });
       }, captureDiagnostic ? usage => patchDiagnostic(responseId, { usage }) : undefined,
       captureDiagnostic ? event => { if (event.requestId === gateway?.requestId) patchDiagnostic(responseId, { gatewayTimings: event.timings }); } : undefined,
-      searchRequested ? event => {
+      webEnabled ? event => {
         if (event.type === "web-status") setWebStatuses(previous => ({ ...previous, [responseId]: event.status }));
         updateMessage(id, responseId, m => ({ webSearch: {
           version: 1, runId: event.runId,
@@ -328,12 +322,12 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
       if (captureDiagnostic) patchDiagnostic(responseId, { status: "completed" });
       updateMessage(id, responseId, { state: "complete" });
     } catch (error) {
-      if (searchRequested) updateMessage(id, responseId, m => ({ webSearch: m.webSearch
+      if (webEnabled) updateMessage(id, responseId, m => ({ webSearch: m.webSearch
         ? { ...m.webSearch, outcome: abort.signal.aborted ? "stopped" : "failed" } : undefined }));
       if (captureDiagnostic) patchDiagnostic(responseId, { status: abort.signal.aborted ? "stopped" : responseStarted ? "interrupted" : "error" });
       if (abort.signal.aborted) updateMessage(id, responseId, { state: "stopped", note: "You stopped this reply." });
-      else updateMessage(id, responseId, { state: "error", note: searchRequested && responseStarted
-        ? "Web search was interrupted. No complete web-backed answer was produced. Please retry."
+      else updateMessage(id, responseId, { state: "error", note: webEnabled && responseStarted
+        ? "The reply was interrupted. Please retry."
         : error instanceof Error ? error.message : "The connection was interrupted. Please retry." });
     } finally {
       setWebStatuses(previous => { const next = { ...previous }; delete next[responseId]; return next; });
@@ -383,7 +377,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
       setDraft(message.content); setRetryImageId(message.id); textarea.current?.focus();
       return;
     }
-    void send(message.content, message.id, image ?? null, message.searchRequested === true);
+    void send(message.content, message.id, image ?? null);
   }
   function deleteConversation() {
     imageDrafts.current.delete(deleting);
@@ -485,8 +479,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
             <div className="message-avatar">{message.role === "assistant" ? logo : "Z"}</div>
             <div className="message-body">
               <div className="message-author">{message.role === "user" ? "You" : answerModelLabel(message.model ?? DEFAULT_MODEL, message.useAdapter)}{message.role === "assistant" && <span>ASSISTANT</span>}</div>
-              {message.role === "user" && message.searchRequested && <div className="web-search-label">Web search requested</div>}
-              {webStatuses[message.id] && <p className="web-search-progress" role="status">{({ planning: "Planning web search…", searching: "Searching the web…", reading: "Reading sources…", answering: "Writing answer…" })[webStatuses[message.id]]}</p>}
+              {webStatuses[message.id] && <p className="web-search-progress" role="status">{({ planning: "Considering your question…", searching: "Searching the web…", reading: "Reading sources…", answering: "Writing answer…" })[webStatuses[message.id]]}</p>}
               {message.role === "user" && message.imageName && <MessageAttachment name={message.imageName} attachment={sentImages.current.get(message.id)?.attachment}/>}
               {message.content ? message.role === "user" ? <p className="user-content">{message.content}</p> : <AnswerPaint messageId={message.id} onPaint={diagnosticsById.get(message.id)?.browserTimings?.firstRenderMs === null ? markFirstRender : undefined}><MessageMarkdown message={message}/></AnswerPaint>
                 : busy && index === messages.length - 1 ? <div className="thinking" aria-label="Qwen is thinking"><span/><span/><span/></div> : null}
@@ -533,17 +526,15 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
             <span className="composer-model">{logo} {imageMode ? "FLUX.2 dev" : selectedLabel}</span>
             <div className="composer-controls">
               <span className="enter-hint">Shift + Enter for a new line</span>
-              {!imageMode && <><button type="button" className="web-search-toggle" aria-pressed={searchWeb} aria-describedby="web-search-help"
-                disabled={!!busy || (!searchWeb && !!webUnavailable)} onClick={() => setSearchWeb(value => !value)}><Search size={15} aria-hidden="true"/><span>Search web</span></button>
-              <button type="button" className="attach-image-button" aria-label="Attach image" aria-describedby="image-input-help"
+              {!imageMode && <button type="button" className="attach-image-button" aria-label="Attach image" aria-describedby="image-input-help"
                 disabled={!!attachmentUnavailable || !!busy || readingImage} onClick={() => fileInput.current?.click()}>
                 <ImagePlus size={17} aria-hidden="true"/>
-              </button></>}
+              </button>}
               {imageMode ? <button className="send-button" aria-label={referenceSource !== null ? "Apply image edit" : "Generate image"} disabled={!imageDraft.trim() || !imageJobs.available || preparingReference || (referenceSource !== null && (!imageReference || !imageJobs.editingAvailable)) || activeEntry?.loaded === false}><ImagePlus size={20}/></button> : busy ? <button type="button" className="send-button stop-button" aria-label="Stop generation" onClick={() => { if (activeId) controllers.current.get(activeId)?.abort(); textarea.current?.focus(); }}><Square size={15} fill="currentColor"/></button>
-                : <button className="send-button" aria-label="Send message" disabled={!draft.trim() || readingImage || activeEntry?.loaded === false || (searchWeb && !!webUnavailable) || (!!attachment && !!attachmentUnavailable) || (!!retryImageId && !attachment)}><ArrowUp size={20}/></button>}
+                : <button className="send-button" aria-label="Send message" disabled={!draft.trim() || readingImage || activeEntry?.loaded === false || (!!attachment && !!attachmentUnavailable) || (!!retryImageId && !attachment)}><ArrowUp size={20}/></button>}
             </div>
           </div>
-          {!imageMode && <><p className="web-search-help" id="web-search-help">{webUnavailable || (searchWeb ? "Search required for this message. Your question is sent to a web search provider." : "Search web is off. Turn it on to look up current sources.")}</p>
+          {!imageMode && <><p className="web-search-help" id="web-search-help">{webUnavailable || "The model can search when your question needs web evidence. Relevant queries may be sent to a search provider."}</p>
           <div className="composer-attachment-note" id="image-input-help" aria-live="polite">
             {readingImage ? "Preparing image…" : retryImageId && !attachment ? "Reattach the original image to retry this message." : attachmentUnavailable}
             {retryImageId && !attachment && imageUnavailable && <span> {imageUnavailable}</span>}
@@ -575,7 +566,7 @@ export function MessageMarkdown({ message }: { message: Message }) {
         const marker = typeof children === "string" ? /^\[?(S[1-9][0-9]{0,2})\]?$/.exec(children)?.[1] : undefined;
         const sourceId = href?.startsWith("#web-citation-") ? href.slice(14) : marker;
         const source = metadata?.sources.find(s => sourceId ? s.sourceId === sourceId : s.url === href);
-        if (metadata && !source) return <span>{children}</span>;
+        if (metadata?.sources.length && !source) return <span>{children}</span>;
         return <a href={source?.url ?? href} target="_blank" rel="noopener noreferrer" className={source ? "web-citation" : undefined}
           aria-label={source ? `${source.sourceId}: ${source.title} (opens in a new tab)` : undefined}>{children}</a>;
       },
