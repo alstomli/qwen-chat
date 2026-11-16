@@ -105,7 +105,7 @@ test("browser, cloud and exports preserve compact citations without putting meta
   assert.deepEqual(completedHistory(chat.messages), [{ role: "user", content: "Look up" }, { role: "assistant", content: "Found [S1]" }]);
 });
 
-test("authenticated API fails closed on unsupported or unconfirmed search and validates streamed sources", async context => {
+test("authenticated API automatically enables eligible text, falls back when unsupported, and fails closed on unconfirmed tools", async context => {
   const saved = { ...process.env }; let available = true; let accepted = true; let forwarded: Record<string, unknown> | undefined; let abortDuringHealth: (() => void) | undefined;
   Object.assign(process.env, { NODE_ENV: "production", RUNPOD_BF16_CHAT_URL: "https://gateway.example", RUNPOD_BF16_CHAT_TOKEN: "x".repeat(48) });
   context.mock.method(globalThis, "fetch", async (...[url, init]: Parameters<typeof fetch>) => {
@@ -115,18 +115,19 @@ test("authenticated API fails closed on unsupported or unconfirmed search and va
       return Response.json({ ready: true, model: "qwen-bf16", settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true, adapterToggleVersion: 1, adapterToggleAvailable: true, limits: SETTINGS_MAX, webSearchVersion: 1, webSearchAvailable: available, webSearch: { models: [{ useAdapter: false, available }] } });
     }
     forwarded = JSON.parse(String(init?.body));
-    return new Response(webStream, { headers: { "X-Chat-Adapter-Enabled": "false", ...(accepted ? { "X-Chat-Web-Search": "1" } : {}) } });
+    return new Response(available ? webStream : 'data: {"choices":[{"delta":{"content":"Plain answer"}}]}\n\ndata: [DONE]\n\n', { headers: { "X-Chat-Adapter-Enabled": "false", ...(accepted ? { "X-Chat-Web-Search": "1" } : {}) } });
   });
   const headers = { Origin: "https://chat.example", Cookie: cookieHeader(issueSession()).split(";")[0], "Content-Type": "application/json" };
-  const request = (signal?: AbortSignal) => new Request("https://chat.example/api/chat", { method: "POST", headers, signal, body: JSON.stringify({ messages, webSearch: { version: 1, mode: "required" } }) });
+  const request = (signal?: AbortSignal) => new Request("https://chat.example/api/chat", { method: "POST", headers, signal, body: JSON.stringify({ messages }) });
   try {
     assert.equal((await POST(new Request("https://chat.example/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages }) }))).status, 401);
     const status = await (await GET(new Request("https://chat.example/api/status", { headers }))).json();
     assert.equal(status.webSearchAvailable, true);
     const response = await POST(request()); assert.equal(response.status, 200); assert.equal(response.headers.get("X-Chat-Web-Search"), "1");
-    assert.match(await response.text(), /web-sources/); assert.deepEqual(forwarded?.webSearch, { version: 1, mode: "required" });
+    assert.match(await response.text(), /web-sources/); assert.deepEqual(forwarded?.webSearch, { version: 1, mode: "auto" });
     accepted = false; assert.equal((await POST(request())).status, 503);
-    available = false; forwarded = undefined; assert.equal((await POST(request())).status, 503); assert.equal(forwarded, undefined);
+    available = false; forwarded = undefined; const plain = await POST(request()); assert.equal(plain.status, 200); assert.equal(plain.headers.get("X-Chat-Web-Search"), null); await plain.text(); assert.equal((forwarded as Record<string, unknown> | undefined)?.webSearch, undefined);
+    forwarded = undefined;
     available = true; accepted = true;
     const abort = new AbortController(); abortDuringHealth = () => abort.abort();
     assert.equal((await POST(request(abort.signal))).status, 499);
@@ -135,4 +136,14 @@ test("authenticated API fails closed on unsupported or unconfirmed search and va
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
     Object.assign(process.env, saved);
   }
+});
+
+
+test("automatic direct answers do not claim a search or strip ordinary links", () => {
+  const message: Message = { id: "direct", role: "assistant", content: "Read [the supplied link](https://example.com/supplied)", state: "complete", webSearch: { ...metadata, sources: [] } };
+  assert.equal(renderToStaticMarkup(createElement(WebSources, { message })), "");
+  assert.match(renderToStaticMarkup(createElement(MessageMarkdown, { message })), /href="https:\/\/example.com\/supplied"/);
+  const exported = historyMarkdown([{ id: "c", title: "Direct", updatedAt: 1, messages: [message] }]);
+  assert.match(exported, /Reply: completed/);
+  assert.doesNotMatch(exported, /Web search: completed/);
 });

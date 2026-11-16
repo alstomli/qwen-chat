@@ -3,7 +3,7 @@ import { isModelId } from "./models";
 /** Public web-search protocol. Provider credentials and page bodies never enter this module. */
 export const WEB_SEARCH_HEADER = "X-Chat-Web-Search";
 export const WEB_SEARCH_TIMEOUT_MS = 240_000;
-export const WEB_SEARCH_UNAVAILABLE = "Web search is unavailable for this model. Refresh the connection or turn off Search web.";
+export const WEB_SEARCH_UNAVAILABLE = "Web search is unavailable for this model. Replies use the model without live web evidence.";
 export type WebSearchRequest = { version: 1; mode: "off" | "auto" | "required" };
 export type WebSource = { runId: string; sourceId: string; title: string; url: string; retrievedAt: string; evidenceKind: "search" | "page" };
 export type WebSearchMetadata = { version: 1; runId: string; outcome: "completed" | "failed" | "stopped" | "interrupted"; sources: WebSource[] };

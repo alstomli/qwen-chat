@@ -29,11 +29,11 @@ export function citationPlugin(sources: WebSource[]) {
 
 export function WebSources({ message }: { message: Message }) {
   const metadata = parseWebMetadata(message.webSearch);
-  if (!metadata) return null;
+  if (!metadata || metadata.sources.length === 0) return null;
   const finished = metadata.outcome === "completed" && message.state === "complete";
   return <div className="web-sources">
-    <p className="web-sources-outcome">{finished ? metadata.sources.length ? "Answer with web sources" : "Search finished without usable sources."
-      : message.state ? "Search incomplete. Collected sources may not support a complete answer." : "Sources collected"}</p>
+    <p className="web-sources-outcome">{finished ? metadata.sources.length ? "Answer with web sources" : "Answer completed without web sources."
+      : message.state ? "Reply incomplete. Collected sources may not support a complete answer." : "Sources collected"}</p>
     {metadata.sources.length > 0 && <details><summary>Sources ({metadata.sources.length})</summary><ul>{metadata.sources.map(source => <li key={source.sourceId}>
       <a href={source.url} target="_blank" rel="noopener noreferrer" aria-label={`${source.sourceId}: ${source.title} (opens in a new tab)`}>
         <span className="web-source-id">[{source.sourceId}]</span> {source.title} <span aria-hidden="true">↗</span>
