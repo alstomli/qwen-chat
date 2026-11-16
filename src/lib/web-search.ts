@@ -25,7 +25,7 @@ export function webSearchForProfile(capability: { webSearchProfiles?: WebSearchP
 }
 export type WebEvent = { version: 1; runId: string; sequence: number } & (
   { type: "web-status"; status: WebStatus } | { type: "web-sources"; sources: WebSource[] } |
-  { type: "web-complete"; outcome: "completed" | "failed" });
+  { type: "web-complete"; outcome: "completed" | "failed"; reason?: string });
 const runPattern = /^[a-zA-Z0-9_-]{1,80}$/;
 const sourcePattern = /^S[1-9][0-9]{0,2}$/;
 
@@ -83,7 +83,9 @@ export function webEventReader() {
           throw new Error("The web search sources could not be verified. Please retry.");
         registry = sources; event = { ...base, type, sources };
       } else if (type === "web-complete" && ["completed", "failed"].includes(String(v.outcome))) {
-        complete = true; event = { ...base, type, outcome: v.outcome as "completed" | "failed" };
+        complete = true;
+        const reasons = ["context_limit","model_unavailable","tool_model_unavailable","invalid_model_response","invalid_model_usage","invalid_tool_call","search_required","no_web_evidence","invalid_final_stream","incomplete_final_stream","unexpected_final_tool"];
+        event = { ...base, type, outcome: v.outcome as "completed" | "failed", ...(v.outcome === "failed" && reasons.includes(String(v.reason)) ? {reason:String(v.reason)} : {}) };
       } else throw new Error("The web search response could not be verified. Please retry.");
       runId = v.runId; sequence = Number(v.sequence); return event;
     },
@@ -96,9 +98,9 @@ export function validatedWebStream(stream: ReadableStream<Uint8Array>) {
   return stream.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       buffer += decoder.decode(chunk, { stream: true });
-      if (buffer.length > 262144) throw new Error("Web search stream exceeded its event limit.");
       let match;
       while ((match = /\r?\n\r?\n/.exec(buffer))) {
+        if (match.index > 1048576) throw new Error("Web search stream exceeded its event limit.");
         const block = buffer.slice(0, match.index); buffer = buffer.slice(match.index + match[0].length);
         const type = block.split(/\r?\n/).find(l => l.startsWith("event:"))?.slice(6).trim();
         const data = block.split(/\r?\n/).filter(l => l.startsWith("data:")).map(l => l.slice(5).trimStart()).join("\n");
@@ -111,6 +113,7 @@ export function validatedWebStream(stream: ReadableStream<Uint8Array>) {
           controller.enqueue(encoder.encode(block + "\n\n"));
         }
       }
+      if (buffer.length > 1048576) throw new Error("Web search stream exceeded its event limit.");
     },
     flush() { if (buffer.trim() || !events.complete) throw new Error("Web search ended before its result was verified."); },
   }));

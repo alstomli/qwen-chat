@@ -1,3 +1,4 @@
+import { traceEventReader, type TraceUpdate } from "./request-trace";
 import { validateSettings, jsonBytes, type ChatSettings } from "./chat-settings";
 import { parseUsage, parseTimingEvent, type GatewayTimingEvent, type TokenUsage } from "./diagnostics";
 import { parseModelId, type ModelId } from "./models";
@@ -57,16 +58,23 @@ export async function consumeCompletion(
   onUsage?: (usage: TokenUsage) => void,
   onTiming?: (event: GatewayTimingEvent) => void,
   onWebEvent?: (event: WebEvent) => void,
+  trace?: { requestId: string; onUpdate: (update: TraceUpdate) => void },
 ) {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let completed = false;
   const webEvents = webEventReader();
+  const traceEvents = traceEventReader(trace?.requestId);
   function event(block: string) {
     const eventName = block.split(/\r?\n/).find(line => line.startsWith("event:"))?.slice(6).trim();
     const data = block.split(/\r?\n/).filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
     if (!data) return;
+    if (eventName?.startsWith("chat-trace")) {
+      const update = traceEvents.read(eventName, JSON.parse(data));
+      if (update) trace!.onUpdate(update);
+      return;
+    }
     if (eventName?.startsWith("web-")) {
       if (onWebEvent) onWebEvent(webEvents.read(eventName, JSON.parse(data)));
       return;
@@ -93,11 +101,17 @@ export async function consumeCompletion(
       buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
       let boundary;
       while ((boundary = /\r?\n\r?\n/.exec(buffer))) {
+        if (boundary.index > 1048576) throw new Error("Stream event exceeded its limit.");
         event(buffer.slice(0, boundary.index));
         buffer = buffer.slice(boundary.index + boundary[0].length);
       }
+      if (buffer.length > 1048576) throw new Error("Stream event exceeded its limit.");
       if (done) break;
     }
     if (!completed) throw new Error("The connection ended before the reply finished. You can retry.");
-  } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+  } finally {
+    const partial = traceEvents.pending + (buffer.trim() ? `\n[Incomplete SSE frame]\n${buffer}` : "");
+    if (trace && partial) trace.onUpdate({partial,bytes:new TextEncoder().encode(partial).length+partial.length*2});
+    await reader.cancel().catch(() => {}); reader.releaseLock();
+  }
 }

@@ -1,6 +1,34 @@
 "use client";
 import { useState } from "react";
 import { diagnosticValues, diagnosticsCsv, type DiagnosticRecord } from "@/lib/diagnostics";
+import type { RequestTrace } from "@/lib/request-trace";
+
+function TraceInspector({ trace }: { trace: RequestTrace }) {
+  const [open, setOpen] = useState(false);
+  function download() {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(trace, null, 2)], {type:"application/json"}));
+    const anchor = document.createElement("a"); anchor.href=url; anchor.download=`request-trace-${trace.requestId}.json`;
+    document.body.append(anchor);anchor.click();anchor.remove();setTimeout(() => URL.revokeObjectURL(url),1000);
+  }
+  return <details onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary>Model request trace · {trace.evicted ? "evicted" : trace.complete ? "complete" : "incomplete"}</summary>
+    <p className="diagnostic-caption">{trace.complete ? "All available records received." : `Incomplete: ${trace.reason || "stream ended or was stopped before completion"}.`} Text is rendered as plain text. Export may contain private conversation text.</p>
+    <button type="button" onClick={download} disabled={trace.evicted}>Export trace JSON</button>
+    {open && trace.partial && <details><summary>Received partial record (incomplete)</summary><pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>{trace.partial}</pre></details>}
+    {open && [...new Set(trace.records.map(record => record.phase))].map(phase => <details key={phase}>
+      <summary>{phase}</summary>
+      {trace.records.filter(record => record.phase === phase && record.kind === "request").map((record,index) => {
+        const sent = record.payload.sent as Record<string,unknown>;
+        const messages = sent.messages as {role:string;content:unknown;tool_calls?:unknown}[];
+        return <div key={index}>
+          {messages.map((message,i) => <details key={i}><summary>{i+1}. {message.role}</summary><pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>{typeof message.content === "string" ? message.content : JSON.stringify(message.content,null,2)}{message.tool_calls ? `\n${JSON.stringify(message.tool_calls,null,2)}` : ""}</pre></details>)}
+          <details><summary>Tools, model and effective settings</summary><pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>{JSON.stringify({...record.payload,sent:{...sent,messages:undefined}},null,2)}</pre></details>
+        </div>;
+      })}
+      <details><summary>Response, tool results and failures</summary><pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>{JSON.stringify(trace.records.filter(record => record.phase === phase && record.kind !== "request"),null,2)}</pre></details>
+    </details>)}
+  </details>;
+}
 
 export function exportDiagnostics(records: DiagnosticRecord[]) {
   const url = URL.createObjectURL(new Blob(["\uFEFF", diagnosticsCsv(records)], { type: "text/csv;charset=utf-8" }));
@@ -43,6 +71,7 @@ export function RequestDiagnostics({ record }: { record: DiagnosticRecord }) {
   }
   return <details className="request-diagnostics">
     <summary>Request diagnostics · {record.status}</summary>
+    {record.trace ? <TraceInspector trace={record.trace}/> : <p className="diagnostic-caption">Full trace unavailable or not yet received.</p>}
     {values.selected_model && <p className="diagnostic-caption">{values.selected_model}</p>}
     <p className="diagnostic-caption">Before/after counts include the system instructions and chat template. “Before” starts after browser trimming.</p>
     <p className="diagnostic-caption">Browser timings start at Send; gateway timings use its own clock. First render is estimated after committed answer content and a visible paint opportunity, not an exact display timestamp. Gateway timings arrive at stream end and may be unavailable after cancellation. Use Grafana for engine TTFT and ITL; these durations have different boundaries.</p>
