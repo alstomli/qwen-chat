@@ -1,3 +1,4 @@
+import { validatedTraceStream, readFailureTrace } from "@/lib/request-trace";
 import { RequestDeadline } from "@/lib/request-deadline";
 import { requestPrincipal, sameOrigin } from "@/lib/auth";
 import { connectionConfig, gatewayCapabilities, GatewayCompatibilityError, diagnosticsAllowed, jsonError, readJson } from "@/lib/server";
@@ -119,7 +120,6 @@ async function handle(request: Request, deadline: RequestDeadline) {
     const diagnostic = diagnosticRequested ? parseDiagnosticHeader(upstream.headers.get(DIAGNOSTICS_HEADER)) : null;
     const diagnosticHeaders: Record<string, string> = diagnostic ? { [DIAGNOSTICS_HEADER]: JSON.stringify(diagnostic) } : {};
     if (!upstream.ok || !upstream.body) {
-      deadline.finish();
       let message = "Your model is unavailable or still loading. Try again shortly.";
       if (upstream.status === 429) message = "Your model is answering another request. Try again in a moment.";
       const upstreamRejection = upstream.headers.get("X-Chat-Rejection");
@@ -146,15 +146,22 @@ async function handle(request: Request, deadline: RequestDeadline) {
         message = "The model account limits could not be verified. Please try again shortly.";
       if (input.webSearch && rejection?.startsWith("web_")) message = rejection === "web_incompatible"
         ? "Use web search and image attachments in separate messages." : "Web search could not finish. No web-backed answer was produced. Please retry.";
+      let failureTrace;
+      if (diagnosticRequested && diagnostic && upstream.body) {
+        try { failureTrace = await deadline.run(readFailureTrace(upstream, diagnostic.requestId, deadline.signal));
+        } catch { failureTrace = {version:1,requestId:diagnostic.requestId,records:[],complete:false,reason:"invalid_failure_trace",bytes:0}; }
+      }
       controller.abort(); void upstream.body?.cancel().catch(() => {});
+      deadline.finish();
       const response = jsonError(message, upstream.status === 400 && rejection === "user_identity" ? 503 : [400, 413, 429].includes(upstream.status) || (upstream.status === 504 && rejection === "queue_timeout") ? upstream.status : 503);
       if (upstream.status === 429 && rejection !== null && ["queue_full", "rate_limit", "user_capacity", "user_rate_limit"].includes(rejection))
         response.headers.set("X-Chat-Rejection", rejection);
       if (retryAfter !== null) response.headers.set("Retry-After", String(retryAfter));
       for (const [key, value] of Object.entries(diagnosticHeaders)) response.headers.set(key, value);
-      return response;
+      return failureTrace ? new Response(JSON.stringify({error:message,trace:failureTrace}), {status:response.status,headers:response.headers}) : response;
     }
-    const reader = (input.webSearch ? validatedWebStream(upstream.body) : upstream.body).getReader();
+    const verified = validatedTraceStream(upstream.body, diagnostic?.requestId);
+    const reader = (input.webSearch ? validatedWebStream(verified) : verified).getReader();
     const finish = () => { deadline.finish(); };
     const stream = new ReadableStream<Uint8Array>({
       async pull(controller) {

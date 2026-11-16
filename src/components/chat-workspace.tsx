@@ -1,10 +1,11 @@
 "use client";
+import { parseFailureTrace, type TraceUpdate } from "@/lib/request-trace";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ArrowUp, ArrowUpRight, Check, Code2, Compass, Copy, Feather, ImagePlus, LoaderCircle, LogOut, Menu, MessageSquare, PanelLeftClose, Plus, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, X, RotateCcw } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { RequestDiagnostics, exportDiagnostics } from "@/components/request-diagnostics";
-import { DIAGNOSTICS_HEADER, parseDiagnosticHeader, type BrowserTimings, type DiagnosticRecord } from "@/lib/diagnostics";
+import { DIAGNOSTICS_HEADER, parseDiagnosticHeader, retainDiagnostics, type BrowserTimings, type DiagnosticRecord } from "@/lib/diagnostics";
 import { ImageReferencePreview } from "@/components/image-reference-preview";
 import { ImageJobCard } from "@/components/image-job-card";
 import { useImageJobs } from "@/lib/use-image-jobs";
@@ -70,14 +71,21 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   const [sidebar, setSidebar] = useState(false); const [settings, setSettings] = useState(false); const [deleting, setDeleting] = useState<string | null>(null);
   const [connections, setConnections] = useState(initialModelConnections);
   const statusRequests = useRef<ReturnType<typeof allModelStatusRequests> | null>(null);
-  const [draftAdapter, setDraftAdapter] = useState(true);
+  const [draftAdapter, setDraftAdapter] = useState(false);
   const [streamingChats, setStreamingChats] = useState<Set<string>>(() => new Set());
   const [toast, setToast] = useState(""); const [preferences, setPreferences] = useState<ModelSettings>({ bf16: { ...DEFAULT_SETTINGS } }); const [temperature, setTemperature] = useState(0.7);
   const [diagnosticsEnabled, setDiagnosticsEnabled] = useState<Record<ModelId, boolean>>({ bf16: false });
   const [diagnosticRecords, setDiagnosticRecords] = useState<DiagnosticRecord[]>([]);
   const diagnosticsById = new Map(diagnosticRecords.map(record => [record.id, record]));
   function patchDiagnostic(id: string, patch: Partial<DiagnosticRecord>) {
-    setDiagnosticRecords(records => records.map(record => record.id === id ? { ...record, ...patch } : record));
+    setDiagnosticRecords(records => retainDiagnostics(records.map(record => record.id === id ? { ...record, ...patch } : record)));
+  }
+  function updateTrace(id: string, requestId: string, update: TraceUpdate) {
+    setDiagnosticRecords(records => retainDiagnostics(records.map(record => {
+      if (record.id !== id || record.trace?.evicted) return record;
+      const trace = record.trace ?? {version:1 as const,requestId,records:[],bytes:0,complete:false,reason:"incomplete"};
+      return {...record, trace: "partial" in update ? {...trace,partial:update.partial,bytes:trace.bytes+update.bytes,complete:false,reason:"received_partial_record"} : "entry" in update ? {...trace, records:[...trace.records,update.entry], bytes:trace.bytes+update.bytes} : {...trace,...update}};
+    })));
   }
   function patchBrowserTiming(id: string, patch: Partial<BrowserTimings>) {
     setDiagnosticRecords(records => records.map(record => record.id === id && record.browserTimings
@@ -94,7 +102,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   const busy = activeId !== null && streamingChats.has(activeId);
   const selectedModel = active?.model ?? DEFAULT_MODEL;
   const connection = connections[selectedModel];
-  const selectedAdapter = canUseAdvancedSettings ? active ? active.useAdapter ?? true : draftAdapter : false;
+  const selectedAdapter = canUseAdvancedSettings ? active ? active.useAdapter ?? false : draftAdapter : false;
   const adapterAvailable = selectedModel === "bf16" && connection.adapterToggleAvailable === true;
   const effectiveAdapter = adapterForAccess(selectedModel, adapterAvailable ? selectedAdapter : undefined, canUseAdvancedSettings);
   const selectedLabel = answerModelLabel(selectedModel, effectiveAdapter);
@@ -200,7 +208,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   function newChat() {
     if (!switchConversation(null)) return;
     if (activeId === null && !attachment && !retryImageId) { clearDraft(); setImageDraft(""); setImageReference(null); setReferenceSource(null); }
-    setDraftAdapter(true); textarea.current?.focus();
+    setDraftAdapter(false); textarea.current?.focus();
   }
   async function chooseImage(file: File) {
     if (attachmentUnavailable || !imageInput) { setToast(attachmentUnavailable); return; }
@@ -283,13 +291,19 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
     setStreamingChats(previous => new Set(previous).add(id));
     textarea.current?.focus();
     let webEnabled = false;
+    let webFailure: string | undefined;
     let responseStarted = false;
     let contentReceived = false;
     try {
       const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json", ...(captureDiagnostic ? { [DIAGNOSTICS_HEADER]: "1" } : {}) }, body: JSON.stringify({ model: selectedModel, useAdapter, messages: input, max_tokens: effectiveSettings.outputTokens, temperature, settings: effectiveSettings, image: image?.dataUrl }), signal: abort.signal });
       const gateway = captureDiagnostic ? parseDiagnosticHeader(response.headers.get(DIAGNOSTICS_HEADER)) : null;
       if (captureDiagnostic) patchDiagnostic(responseId, { gateway });
-      if (!response.ok || !response.body) { if (response.status === 401) setAuthenticated(false); throw new Error((await response.json()).error ?? "Couldn't start a reply."); }
+      if (!response.ok || !response.body) {
+        if (response.status === 401) setAuthenticated(false);
+        const failure = await response.json();
+        if (captureDiagnostic && gateway && failure.trace) patchDiagnostic(responseId,{trace:parseFailureTrace(failure.trace,gateway.requestId)});
+        throw new Error(failure.error ?? "Couldn't start a reply.");
+      }
       webEnabled = response.headers.get(WEB_SEARCH_HEADER) === "1";
       if (image && response.headers.get(IMAGE_ACCEPTED_HEADER) !== "true") {
         await response.body.cancel().catch(() => {});
@@ -316,8 +330,11 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
           outcome: event.type === "web-complete" ? event.outcome : m.webSearch?.outcome ?? "interrupted",
           sources: event.type === "web-sources" ? event.sources : m.webSearch?.sources ?? [],
         } }));
-        if (event.type === "web-complete" && event.outcome === "failed") throw new Error("Web search could not finish. No web-backed answer was produced. Please retry.");
-      } : undefined);
+        if (event.type === "web-complete" && event.outcome === "failed") {
+          webFailure = event.reason ? `Web search could not finish (${event.reason.replaceAll("_", " ")}). Please retry.` : "Web search could not finish. Please retry.";
+          throw new Error(webFailure);
+        }
+      } : undefined, captureDiagnostic && gateway ? {requestId:gateway.requestId,onUpdate:update => updateTrace(responseId,gateway.requestId,update)} : undefined);
       if (captureDiagnostic) patchBrowserTiming(responseId, { completionMs: performance.now() - submitted });
       if (captureDiagnostic) patchDiagnostic(responseId, { status: "completed" });
       updateMessage(id, responseId, { state: "complete" });
@@ -327,7 +344,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
       if (captureDiagnostic) patchDiagnostic(responseId, { status: abort.signal.aborted ? "stopped" : responseStarted ? "interrupted" : "error" });
       if (abort.signal.aborted) updateMessage(id, responseId, { state: "stopped", note: "You stopped this reply." });
       else updateMessage(id, responseId, { state: "error", note: webEnabled && responseStarted
-        ? "The reply was interrupted. Please retry."
+        ? webFailure ?? "The reply was interrupted. Please retry."
         : error instanceof Error ? error.message : "The connection was interrupted. Please retry." });
     } finally {
       setWebStatuses(previous => { const next = { ...previous }; delete next[responseId]; return next; });
@@ -551,7 +568,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
       diagnosticsEnabled={diagnosticsEnabled} onDiagnosticsChange={(model, enabled) => { if (canUseAdvancedSettings) setDiagnosticsEnabled(previous => ({ ...previous, [model]: enabled })); }}
       onRefresh={() => { void statusRequests.current?.refresh(); }}
       onApply={(model, next) => { if (canUseAdvancedSettings) { setPreferences(previous => ({ ...previous, [model]: next })); setToast(`${modelInfo(model).label} settings saved.`); } }}/>
-      {canUseAdvancedSettings && diagnosticRecords.length > 0 && <div className="diagnostic-session"><p className="settings-help">{diagnosticRecords.length} diagnostic records in this session (latest 100). Reloading or signing out clears them.</p><button type="button" className="secondary-button" onClick={() => exportDiagnostics(diagnosticRecords)}>Export session CSV</button></div>}
+      {canUseAdvancedSettings && diagnosticRecords.length > 0 && <div className="diagnostic-session"><p className="settings-help">{diagnosticRecords.length} diagnostic records in this session (latest 100 summaries; full traces up to 8 requests / 96 MiB including UTF-8 and UTF-16 accounting; older traces visibly evicted). Reloading or signing out clears them.</p><button type="button" className="secondary-button" onClick={() => exportDiagnostics(diagnosticRecords)}>Export session CSV</button></div>}
       <section className="history-settings" aria-label="Chat history"><h3>Chat history</h3><p className="settings-help">New chats sync across devices. Cloud history keeps up to 50 chats or 2,000,000 UTF-8 bytes of text and chat details. Chats with the oldest last message are removed when full, except the chat being saved. Older browser conversations stay local, including future replies.</p><p className="settings-help">Text, generated prompts and job details sync. Image files stay in the browser and aren’t included in exports. Export a copy before deleting or reaching the limit.</p><div className="history-export-actions"><button className="secondary-button" disabled={exporting || !chats.length} onClick={() => { void downloadHistory("json", true); }}>Export JSON</button><button className="secondary-button" disabled={exporting || !chats.length} onClick={() => { void downloadHistory("md", true); }}>Export Markdown</button></div>{active && <div className="history-export-actions"><button className="secondary-button" disabled={exporting} onClick={() => { void downloadHistory("json"); }}>Export this chat as JSON</button><button className="secondary-button" disabled={exporting} onClick={() => { void downloadHistory("md"); }}>Export this chat as Markdown</button></div>}{hasPending && <p className="settings-help">A change is waiting to sync. <button className="secondary-button" onClick={() => { void cloud?.retry(); }}>Retry sync</button></p>}</section><p className="settings-footnote">In live mode, messages you send are processed by your model. Older messages may be omitted to fit its context.</p><button className="signout-button" onClick={logout}><LogOut size={16}/> Sign out</button></>}</div></div>}
   </div>;
 }

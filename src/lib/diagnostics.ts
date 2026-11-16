@@ -1,3 +1,5 @@
+import { MAX_SESSION_TRACE_BYTES } from "./request-trace";
+import type { RequestTrace } from "./request-trace";
 import type { ChatSettings } from "./chat-settings";
 import { answerModelLabel, type ModelId } from "./models";
 export const DIAGNOSTICS_HEADER = "X-Chat-Diagnostics";
@@ -20,6 +22,7 @@ export type GatewayDiagnostic = {
 };
 export type DiagnosticRecord = {
   id: string; createdAt: string;
+  trace?: RequestTrace;
   selectedModel?: ModelId;
   useAdapter?: boolean;
   status: "pending" | "streaming" | "completed" | "stopped" | "interrupted" | "error";
@@ -119,4 +122,17 @@ export function diagnosticsCsv(records: DiagnosticRecord[]): string {
     return '"' + text.replaceAll('"', '""') + '"';
   };
   return [keys.map(cell).join(","), ...rows.map(row => keys.map(key => cell(row[key])).join(","))].join("\r\n") + "\r\n";
+}
+
+/** Keep summaries for 100 requests; evict oldest full traces visibly by bytes/count. */
+export function retainDiagnostics(records: DiagnosticRecord[]) {
+  let total = records.reduce((n,r) => n + (r.trace?.bytes ?? 0),0);
+  let count = records.filter(r => r.trace && !r.trace.evicted).length;
+  return records.map(r => {
+    if (r.trace && !r.trace.evicted && (total > MAX_SESSION_TRACE_BYTES || count > 8)) {
+      total -= r.trace.bytes; count--;
+      return {...r,trace:{...r.trace,records:[],partial:undefined,bytes:0,complete:false,reason:"session_eviction",evicted:true}};
+    }
+    return r;
+  }).slice(-100);
 }
