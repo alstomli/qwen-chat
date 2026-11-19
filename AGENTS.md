@@ -7,3 +7,17 @@ This version has breaking changes — APIs, conventions, and file structure may 
 This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 
 <!-- END:nextjs-agent-rules -->
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in the hub tracker, `alstomli/llm-inference-server`; tickets for this repo carry `repo:qwen-chat`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default labels, plus one `repo:*` label per ticket, all in the hub tracker. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Shared glossary and ADRs in `llm-inference-server`, plus frontend-only terms and decisions here. See `docs/agents/domain.md`.
