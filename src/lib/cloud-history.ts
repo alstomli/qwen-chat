@@ -1,7 +1,8 @@
 import { parseGeneratedImage } from "./generated-image";
 import { parseSourceMetadata } from "./history-metadata";
 import { parseWebMetadata } from "./web-search";
-import { hasSupportedModels, isHistoryModel, type Conversation, type Message } from "./storage";
+import { isModelId } from "./models";
+import { hasSupportedModels, withModelTags, type Conversation, type Message } from "./storage";
 
 export const CLOUD_CACHE_KEY = "qwen-chat.cloud-history.v1";
 export const HISTORY_NOTICE_KEY = "qwen-chat.history-notice.v1";
@@ -15,12 +16,12 @@ type Storage = Pick<globalThis.Storage, "getItem" | "setItem" | "removeItem">;
 // Whitelist twice (here and SQL). A streaming placeholder is omitted until its terminal state.
 export function cloudPayload(chat: Conversation): Pick<Conversation, "title" | "model" | "useAdapter" | "messages"> {
   return {
-    title: chat.title.slice(0, 160), model: isHistoryModel(chat.model) ? chat.model : undefined,
+    title: chat.title.slice(0, 160), model: isModelId(chat.model) ? chat.model : undefined,
     useAdapter: typeof chat.useAdapter === "boolean" ? chat.useAdapter : undefined,
     messages: chat.messages.filter(m => m.role === "user" || m.state).map(m => ({
       id: m.id, role: m.role, content: m.content,
       ...(m.role === "user" ? { imageName: m.imageName?.slice(0, 160), docsMode: m.docsMode === true ? true : undefined, searchRequested: m.searchRequested === true ? true : undefined } : {
-        generatedImage: parseGeneratedImage(m.generatedImage), state: m.state, model: isHistoryModel(m.model) ? m.model : undefined,
+        generatedImage: parseGeneratedImage(m.generatedImage), state: m.state, model: isModelId(m.model) ? m.model : undefined,
         useAdapter: typeof m.useAdapter === "boolean" ? m.useAdapter : undefined,
         note: m.state === "error" ? "The reply failed. Please retry." : m.state === "stopped" ? "You stopped this reply." : undefined,
         docsSources: parseSourceMetadata(m.docsSources),
@@ -57,7 +58,7 @@ export class CloudHistoryStore {
       if (Array.isArray(rows)) for (const e of rows) {
         if (!e?.chat?.id || !Array.isArray(e.chat.messages) || typeof e.revision !== "number"
           || !hasSupportedModels(e.chat) || (e.operation && !hasSupportedModels(e.operation.payload))) continue;
-        e.chat = { ...e.chat, ...cloudPayload(e.chat) }; this.entries.set(e.chat.id, e);
+        e.chat = withModelTags({ ...e.chat, ...cloudPayload(e.chat) }); this.entries.set(e.chat.id, e);
       }
       this.merge([...this.entries.values()].filter(e => !e.deleting).map(e => e.chat));
     } catch { this.durable = false; }
@@ -99,7 +100,7 @@ export class CloudHistoryStore {
         const current = this.entries.get(row.id);
         if (current?.deleting || current?.operation || this.protectedChat(row.id) || (current && !["saved", "saving"].includes(current.state))) continue;
         if (!current || current.revision < row.revision) {
-          this.entries.set(row.id, { chat: { id: row.id, title: row.title, updatedAt: row.updatedAt, messages: [], model: row.model, useAdapter: row.useAdapter }, revision: row.revision, loaded: false, state: "saved", createdAt: new Date(row.updatedAt).toISOString() });
+          this.entries.set(row.id, { chat: withModelTags({ id: row.id, title: row.title, updatedAt: row.updatedAt, messages: [], model: row.model, useAdapter: row.useAdapter }), revision: row.revision, loaded: false, state: "saved", createdAt: new Date(row.updatedAt).toISOString() });
         }
       }
       this.offline = false; this.ready = true;
@@ -139,7 +140,8 @@ export class CloudHistoryStore {
       const entry = this.entries.get(id);
       if (!entry || entry.operation || entry.deleting) return entry?.chat ?? null;
       if (entry.revision > revision!) continue;
-      entry.chat = result!; entry.revision = revision!; entry.loaded = true;
+      result = withModelTags(result!);
+      entry.chat = result; entry.revision = revision!; entry.loaded = true;
       entry.fingerprint = JSON.stringify(cloudPayload(result!));
       this.merge([result!]); this.persist(); return result!;
     }

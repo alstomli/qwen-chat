@@ -22,13 +22,13 @@ import { consumeCompletion } from "@/lib/protocol";
 import { WEB_SEARCH_HEADER, WEB_SEARCH_UNAVAILABLE, parseWebMetadata, webSearchForProfile, type WebStatus } from "@/lib/web-search";
 import { IMAGE_ACCEPTED_HEADER, IMAGE_ADAPTER_ERROR, validateImageInput } from "@/lib/image-input";
 import { prepareImage, type ImageAttachment } from "@/lib/prepare-image";
-import { completedHistory, isHistoryModel, parseConversations, STORAGE_KEY, type Conversation, type Message } from "@/lib/storage";
+import { completedHistory, parseConversations, STORAGE_KEY, type Conversation, type Message } from "@/lib/storage";
 import { exportHistory, HISTORY_NOTICE_KEY, type SaveState } from "@/lib/cloud-history";
 import { useCloudHistory } from "@/lib/use-cloud-history";
 
 import { browserAuth } from "@/lib/supabase/browser";
 import { accountStorageKey } from "@/lib/account-storage";
-import { DEFAULT_MODEL, hasAdapter, modelInfo, perModel, answerModelLabel, type ModelId } from "@/lib/models";
+import { DEFAULT_MODEL, UNTAGGED_MODEL, hasAdapter, modelInfo, perModel, answerModelLabel, type ModelId } from "@/lib/models";
 import { ModelPicker } from "@/components/model-picker";
 import { allModelStatusRequests, initialModelConnections, updateModelConnection } from "@/lib/model-status";
 const starters = [
@@ -102,7 +102,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   const textarea = useRef<HTMLTextAreaElement>(null); const searchInput = useRef<HTMLInputElement>(null); const bottom = useRef<HTMLDivElement>(null); const scroller = useRef<HTMLDivElement>(null); const follow = useRef(true); const dialog = useRef<HTMLDivElement>(null);
   const active = chats.find(c => c.id === activeId); const messages = active?.messages ?? [];
   const busy = activeId !== null && streamingChats.has(activeId);
-  const selectedModel = active?.model ?? draftModel;
+  const selectedModel = active ? active.model ?? UNTAGGED_MODEL : draftModel;
   const connection = connections[selectedModel];
   const selectedAdapter = canUseAdvancedSettings ? active ? active.useAdapter ?? false : draftAdapter : false;
   const adapterAvailable = hasAdapter(selectedModel) && connection.adapterToggleAvailable === true;
@@ -490,7 +490,6 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
     </aside>
     <div className="main-shell">
       <header className="workspace-header"><div className="workspace-heading"><button className="icon-button mobile-only" onClick={() => setSidebar(true)} aria-label="Open sidebar"><Menu size={20}/></button><span className="header-label">Personal workspace</span><span className="header-slash">/</span>{active ? <span className="workspace-model">{modelInfo(selectedModel).label}</span> : <ModelPicker connections={connections} value={selectedModel} disabled={readingImage} onChange={selectModel}/>}</div><button className={`connection-pill ${connection.mode === "live" && connection.ready ? "online" : preview ? "preview" : "offline"}`} onClick={() => setSettings(true)}><span/>{preview ? "Local preview" : connection.mode === "checking" ? "Connecting" : connection.mode === "unconfigured" ? "Setup needed" : connection.ready ? "Model online" : "Model offline"}<ArrowUpRight size={13}/></button></header>
-      {active && !isHistoryModel(active.model) && <div className="history-local-note" role="status">4-bit chats aren’t saved to history yet. This chat is only in this tab and is lost when you reload or close it.</div>}
       {active && isLocal(active) && <div className="history-local-note" role="status">{(legacyIds.current.has(active.id) ? !legacyDurable : !cloud?.durable) ? "Browser storage is unavailable. This copy is only in this tab; export it now to keep it." : legacyIds.current.has(active.id) ? "This older conversation stays on this browser, including new replies." : activeEntry?.state === "oversized" && !cloud?.durable ? "This chat is too large for cloud history and browser storage is unavailable. Export it now to keep a copy." : activeEntry?.state === "oversized" ? "This chat is too large for cloud history. It’s saved on this browser; export it to keep a copy." : activeEntry?.state === "conflict" ? "This chat changed on another device. Your unsynced copy stays on this browser." : activeEntry?.state === "create_limited" ? "Too many recent cloud chat changes. This chat stays on this browser; try a new chat later." : "This chat stays on this browser. Export it to keep a copy."}<button disabled={exporting} onClick={() => { void downloadHistory("json"); }}>Export JSON</button><button onClick={newChat}>Start new chat</button></div>}
       {cloud?.usage.paused && <div className="history-local-note" role="status">{cloud.durable ? "Cloud saving is temporarily paused. Your conversations stay on this browser until sync resumes. You can keep chatting, export, or delete history." : "Cloud saving is paused and browser storage is unavailable. Export your conversations now to keep a copy. You can keep chatting or delete history."}</div>}
       <main className={`chat-main ${messages.length ? "has-messages" : ""}`} ref={scroller} onScroll={() => { const el = scroller.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>
@@ -503,7 +502,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
             onGenerate={() => { if (message.generatedImage!.mode === "edit") void beginImageEdit(message.generatedImage!.sourceImageId, message.generatedImage!.prompt); else generateImage(message.generatedImage!.prompt, null, false); }}/> : <article className={`message ${message.role}`} key={message.id}>
             <div className="message-avatar">{message.role === "assistant" ? logo : "Z"}</div>
             <div className="message-body">
-              <div className="message-author">{message.role === "user" ? "You" : answerModelLabel(message.model ?? DEFAULT_MODEL, message.useAdapter)}{message.role === "assistant" && <span>ASSISTANT</span>}</div>
+              <div className="message-author">{message.role === "user" ? "You" : answerModelLabel(message.model ?? selectedModel, message.useAdapter)}{message.role === "assistant" && <span>ASSISTANT</span>}</div>
               {webStatuses[message.id] && <p className="web-search-progress" role="status">{({ planning: "Considering your question…", searching: "Searching the web…", reading: "Reading sources…", answering: "Writing answer…" })[webStatuses[message.id]]}</p>}
               {message.role === "user" && message.imageName && <MessageAttachment name={message.imageName} attachment={sentImages.current.get(message.id)?.attachment}/>}
               {message.content ? message.role === "user" ? <p className="user-content">{message.content}</p> : <AnswerPaint messageId={message.id} onPaint={diagnosticsById.get(message.id)?.browserTimings?.firstRenderMs === null ? markFirstRender : undefined}><MessageMarkdown message={message}/></AnswerPaint>

@@ -6,7 +6,7 @@ const { PGlite } = await import(process.env.CHAT_TEST_PGLITE ? pathToFileURL(res
 import { readFile, readdir } from 'node:fs/promises';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-async function fixture({ beforeHistory } = {}) {
+async function fixture({ beforeHistory, until } = {}) {
   const db = new PGlite();
   await db.exec(`
     create role anon; create role authenticated; create role service_role;
@@ -22,7 +22,7 @@ async function fixture({ beforeHistory } = {}) {
     grant execute on function auth.uid(),auth.jwt() to authenticated, anon;
   `);
   const dir = `${root}/supabase/migrations`;
-  for (const file of (await readdir(dir)).filter(file => file.endsWith('.sql')).sort()) {
+  for (const file of (await readdir(dir)).filter(file => file.endsWith('.sql') && (!until || file < until)).sort()) {
     if (file !== '202611080001_accounts.sql' && beforeHistory) { await beforeHistory(db); beforeHistory = undefined; }
     await db.exec(await readFile(`${dir}/${file}`, 'utf8'));
   }
@@ -136,23 +136,56 @@ await check('cloud ownership, privilege boundary, Google live sessions, immutabl
   } finally { await f.db.close(); }
 });
 
-await check('BF16 model metadata is retained and retired or malformed model identifiers cannot be persisted', async () => {
+await check('4bit and BF16 model metadata is retained and unknown or malformed model identifiers cannot be persisted', async () => {
   const f = await fixture();
   try {
     const user = await f.addUser(); await f.as(user); const { save, get, usage } = await helpers(f);
-    const id = randomUUID(), payload = chat();
-    assert.equal((await save(id, payload)).status, 'saved');
-    const stored = (await get(id)).payload;
-    assert.equal(stored.model, 'bf16'); assert.equal(stored.messages[1].model, 'bf16');
+    for (const model of ['bf16', '4bit']) {
+      const id = randomUUID(), payload = chat(); payload.model = model; payload.messages[1].model = model;
+      assert.equal((await save(id, payload)).status, 'saved');
+      const stored = (await get(id)).payload;
+      assert.equal(stored.model, model); assert.equal(stored.messages[1].model, model);
+    }
     const before = await usage();
-    for (const model of ['4bit', 'unknown', null, 4, {}]) {
+    for (const model of ['awq', 'unknown', 'BF16', '', null, 4, {}]) {
       await assert.rejects(save(randomUUID(), { ...chat(), model }), /Unsupported.*model/i);
       const invalid = chat(); invalid.messages[1].model = model;
       await assert.rejects(save(randomUUID(), invalid), /Unsupported.*model/i);
     }
     assert.deepEqual(await usage(), before, 'Rejected models must not mutate cloud history or consume quota');
     const legacy = chat(); delete legacy.model; delete legacy.messages[1].model;
-    assert.equal((await save(randomUUID(), legacy)).status, 'saved', 'Missing legacy metadata remains accepted');
+    const legacyId = randomUUID();
+    assert.equal((await save(legacyId, legacy)).status, 'saved', 'Missing legacy metadata remains accepted');
+    const storedLegacy = (await get(legacyId)).payload;
+    assert.equal('model' in storedLegacy, false); assert.equal('model' in storedLegacy.messages[1], false);
+  } finally { await f.db.close(); }
+});
+
+await check('the 4-bit history migration is additive: earlier 4bit rows stay intact, load and save again', async () => {
+  const migration = '202611190001_4bit_history.sql';
+  const f = await fixture({ until: migration });
+  try {
+    const user = await f.addUser(); await f.as(user); const { save, get, usage } = await helpers(f);
+    const bf16Id = randomUUID(); assert.equal((await save(bf16Id, chat('bf16 before'))).status, 'saved');
+    await assert.rejects(save(randomUUID(), { ...chat(), model: '4bit' }), /Unsupported.*model/i, 'BF16-only cleaner precedes this migration');
+    // An earlier AWQ-era row, written when the original cleaner accepted 4bit.
+    const awqId = randomUUID(), awq = chat('awq answer'); awq.model = '4bit'; awq.messages[1].model = '4bit';
+    await f.admin();
+    await f.db.query('insert into public.chat_history(user_id,id,payload,payload_bytes,last_operation) values ($1,$2,$3,$4,$5)',
+      [user.id, awqId, awq, Buffer.byteLength(JSON.stringify(awq)), randomUUID()]);
+    const rowsBefore = (await f.db.query('select user_id,id,payload,payload_bytes,revision,last_messaged_at from public.chat_history order by id')).rows;
+    const sql = await readFile(`${root}/supabase/migrations/${migration}`, 'utf8');
+    await f.db.exec(sql); await f.db.exec(sql);
+    assert.deepEqual((await f.db.query('select user_id,id,payload,payload_bytes,revision,last_messaged_at from public.chat_history order by id')).rows, rowsBefore,
+      'Applying (and reapplying) the migration must not change stored rows');
+    await f.as(user);
+    assert.equal((await get(awqId)).payload.model, '4bit'); assert.equal((await get(bf16Id)).payload.model, 'bf16');
+    const before = await usage();
+    awq.messages.push({ id: randomUUID(), role: 'user', content: 'follow-up' }, { id: randomUUID(), role: 'assistant', content: 'more', state: 'complete', model: '4bit' });
+    assert.equal((await save(awqId, awq, 1)).status, 'saved');
+    assert.equal((await get(awqId)).payload.messages[3].model, '4bit');
+    assert.equal((await usage()).count, before.count);
+    await assert.rejects(save(randomUUID(), { ...chat(), model: 'awq' }), /Unsupported.*model/i);
   } finally { await f.db.close(); }
 });
 

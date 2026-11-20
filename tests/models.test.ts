@@ -135,7 +135,7 @@ test("cancelling a selected model stream aborts only its chosen upstream", async
   }
 });
 
-test("both models keep their own preferences; untagged history stays BF16; history holds BF16 only until 4-bit history ships", () => {
+test("both models keep their own preferences; untagged history stays BF16; unknown models stay out of history", () => {
   const preferences = parseModelSettings(null);
   assert.deepEqual(preferences, { "4bit": DEFAULT_SETTINGS, bf16: DEFAULT_SETTINGS });
   assert.equal(preferences.bf16.outputTokens, 7680); assert.equal(preferences.bf16.safetyTokens, 32);
@@ -149,7 +149,7 @@ test("both models keep their own preferences; untagged history stays BF16; histo
   const legacy = { id: "1", title: "legacy", updatedAt: 1, messages: [{ id: "a", role: "assistant", content: "old answer" }] };
   const chats = parseConversations(JSON.stringify([legacy]));
   assert.equal(chats[0].model, "bf16"); assert.equal(chats[0].messages[0].model, "bf16");
-  for (const model of ["4bit", "unknown", null]) {
+  for (const model of ["awq", "unknown", null]) {
     assert.deepEqual(parseConversations(JSON.stringify([{ ...legacy, model }])), []);
     assert.deepEqual(parseConversations(JSON.stringify([{ ...legacy, model: "bf16", messages: [{ ...legacy.messages[0], model }] }])), []);
   }
