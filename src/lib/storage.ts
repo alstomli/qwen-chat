@@ -13,10 +13,11 @@ export function hasSupportedModels(value: { model?: unknown; messages?: { role?:
       && (message.role !== "assistant" || message.model === undefined || isModelId(message.model)))));
 }
 
-/** Conversations and answers saved without a model tag predate the 4-bit default, so they stay BF16. */
+/** Conversations saved without a model tag predate the 4-bit default, so they stay BF16;
+ * an untagged answer (such as a generated image) belongs to its conversation's model. */
 export function withModelTags<T extends Pick<Conversation, "model" | "messages">>(chat: T): T {
-  return { ...chat, model: chat.model ?? UNTAGGED_MODEL,
-    messages: chat.messages.map(m => m.role === "assistant" ? { ...m, model: m.model ?? UNTAGGED_MODEL } : m) };
+  const model = chat.model ?? UNTAGGED_MODEL;
+  return { ...chat, model, messages: chat.messages.map(m => m.role === "assistant" ? { ...m, model: m.model ?? model } : m) };
 }
 
 export function parseConversations(raw: string | null): Conversation[] {

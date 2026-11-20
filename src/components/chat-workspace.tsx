@@ -28,7 +28,7 @@ import { useCloudHistory } from "@/lib/use-cloud-history";
 
 import { browserAuth } from "@/lib/supabase/browser";
 import { accountStorageKey } from "@/lib/account-storage";
-import { DEFAULT_MODEL, hasAdapter, modelInfo, perModel, answerModelLabel, type ModelId } from "@/lib/models";
+import { DEFAULT_MODEL, UNTAGGED_MODEL, hasAdapter, modelInfo, perModel, answerModelLabel, type ModelId } from "@/lib/models";
 import { ModelPicker } from "@/components/model-picker";
 import { allModelStatusRequests, initialModelConnections, updateModelConnection } from "@/lib/model-status";
 const starters = [
@@ -102,7 +102,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   const textarea = useRef<HTMLTextAreaElement>(null); const searchInput = useRef<HTMLInputElement>(null); const bottom = useRef<HTMLDivElement>(null); const scroller = useRef<HTMLDivElement>(null); const follow = useRef(true); const dialog = useRef<HTMLDivElement>(null);
   const active = chats.find(c => c.id === activeId); const messages = active?.messages ?? [];
   const busy = activeId !== null && streamingChats.has(activeId);
-  const selectedModel = active?.model ?? draftModel;
+  const selectedModel = active ? active.model ?? UNTAGGED_MODEL : draftModel;
   const connection = connections[selectedModel];
   const selectedAdapter = canUseAdvancedSettings ? active ? active.useAdapter ?? false : draftAdapter : false;
   const adapterAvailable = hasAdapter(selectedModel) && connection.adapterToggleAvailable === true;
@@ -502,7 +502,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
             onGenerate={() => { if (message.generatedImage!.mode === "edit") void beginImageEdit(message.generatedImage!.sourceImageId, message.generatedImage!.prompt); else generateImage(message.generatedImage!.prompt, null, false); }}/> : <article className={`message ${message.role}`} key={message.id}>
             <div className="message-avatar">{message.role === "assistant" ? logo : "Z"}</div>
             <div className="message-body">
-              <div className="message-author">{message.role === "user" ? "You" : answerModelLabel(message.model ?? DEFAULT_MODEL, message.useAdapter)}{message.role === "assistant" && <span>ASSISTANT</span>}</div>
+              <div className="message-author">{message.role === "user" ? "You" : answerModelLabel(message.model ?? selectedModel, message.useAdapter)}{message.role === "assistant" && <span>ASSISTANT</span>}</div>
               {webStatuses[message.id] && <p className="web-search-progress" role="status">{({ planning: "Considering your question…", searching: "Searching the web…", reading: "Reading sources…", answering: "Writing answer…" })[webStatuses[message.id]]}</p>}
               {message.role === "user" && message.imageName && <MessageAttachment name={message.imageName} attachment={sentImages.current.get(message.id)?.attachment}/>}
               {message.content ? message.role === "user" ? <p className="user-content">{message.content}</p> : <AnswerPaint messageId={message.id} onPaint={diagnosticsById.get(message.id)?.browserTimings?.firstRenderMs === null ? markFirstRender : undefined}><MessageMarkdown message={message}/></AnswerPaint>

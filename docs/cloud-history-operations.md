@@ -344,6 +344,8 @@ rollback once deletion/eviction or post-backup writes have occurred.
 
 ## BF16-only model writes
 
+Superseded by [4-bit model writes](#4-bit-model-writes) once `202611190001_4bit_history.sql` is applied.
+
 After the web-search metadata migration, apply `202611100002_bf16_only.sql`.
 The payload cleaner accepts the BF16 model ID and rejects explicitly unsupported
 conversation or assistant-answer IDs. Missing optional model metadata remains

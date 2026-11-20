@@ -66,6 +66,12 @@ test("a 4bit conversation saves to cloud history, survives a cache restore and l
   remote.store.dispose();
 });
 
+test("an untagged answer, such as a generated image, takes its conversation's model", () => {
+  const chat = { ...fourBitChat(), messages: [{ id: "img", role: "assistant", content: "", state: "complete" }] };
+  const [loaded] = parseConversations(JSON.stringify([chat]));
+  assert.equal(loaded.messages[0].model, "4bit");
+});
+
 test("a cloud conversation saved without a model tag loads as bf16 from listings, pages and the cache", async () => {
   const id = randomUUID();
   const payload = { title: "old", messages: [{ id: "u", role: "user", content: "q" }, { id: "a", role: "assistant", content: "a", state: "complete" }] };
