@@ -84,8 +84,8 @@ test("API forwards diagnostics only with both opt-ins, including errors, and rep
       return new Response(failure ? '{"error":"private upstream detail"}' : sse, { status: failure ? failureStatus : 200, headers: { "X-Chat-Adapter-Enabled": "false", [DIAGNOSTICS_HEADER]: JSON.stringify({ ...summary, credentials: "never forward" }), "Content-Type": "text/event-stream", "X-Chat-Rejection": rejection } });
     };
     const headers = { Origin: "https://chat.example", Cookie: cookieHeader(issueSession(adminIds[0])).split(";")[0], "Content-Type": "application/json" };
-    const request = (diagnostic: boolean) => new Request("https://chat.example/api/chat", { method: "POST", headers: { ...headers, ...(diagnostic ? { [DIAGNOSTICS_HEADER]: "1" } : {}) }, body: JSON.stringify({ messages: [{ role: "user", content: "Hi" }], settings: DEFAULT_SETTINGS }) });
-    const status = await GET(new Request("https://chat.example/api/status", { headers }));
+    const request = (diagnostic: boolean) => new Request("https://chat.example/api/chat", { method: "POST", headers: { ...headers, ...(diagnostic ? { [DIAGNOSTICS_HEADER]: "1" } : {}) }, body: JSON.stringify({ model: "bf16", messages: [{ role: "user", content: "Hi" }], settings: DEFAULT_SETTINGS }) });
+    const status = await GET(new Request("https://chat.example/api/status?model=bf16", { headers }));
     const statusBody = await status.json();
     assert.equal(statusBody.diagnosticsAvailable, true);
     assert.equal(statusBody.diagnosticsVersion, 1);
@@ -117,13 +117,13 @@ test("API forwards diagnostics only with both opt-ins, including errors, and rep
     }
     supported = false;
     assert.equal((await POST(request(true))).status, 503);
-    assert.equal((await (await GET(new Request("https://chat.example/api/status", { headers }))).json()).diagnosticsVersion, 0);
+    assert.equal((await (await GET(new Request("https://chat.example/api/status?model=bf16", { headers }))).json()).diagnosticsVersion, 0);
     supported = true;
     process.env.CHAT_DIAGNOSTICS_ENABLED = "false";
     const before = calls.length;
     assert.equal((await POST(request(true))).status, 403);
     assert.equal(calls.length, before);
-    const disabled = await (await GET(new Request("https://chat.example/api/status", { headers }))).json();
+    const disabled = await (await GET(new Request("https://chat.example/api/status?model=bf16", { headers }))).json();
     assert.equal(disabled.diagnosticsAvailable, false);
     assert.equal(disabled.diagnosticsVersion, 0);
   } finally {

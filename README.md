@@ -26,26 +26,29 @@ Open [the local app](http://127.0.0.1:3001). Setup creates `.env.local` from `.e
 | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_URL` | Public Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Public client key; never a service-role key |
+| `RUNPOD_4BIT_CHAT_URL` | 4-bit gateway HTTPS origin, without a path (default model for new chats) |
+| `RUNPOD_4BIT_CHAT_TOKEN` | Private 4-bit chat gateway credential |
 | `RUNPOD_BF16_CHAT_URL` | BF16 gateway HTTPS origin, without a path |
-| `RUNPOD_BF16_CHAT_TOKEN` | Private chat gateway credential |
+| `RUNPOD_BF16_CHAT_TOKEN` | Private BF16 chat gateway credential |
 | `FLUX_IMAGE_API_URL`, `FLUX_IMAGE_API_KEY` | Optional private FLUX service connection |
 | `CHAT_DIAGNOSTICS_ENABLED` | Server diagnostics opt-in; defaults off |
 
 Keep private credentials server-only. Configure each Vercel Production/Preview environment separately and rebuild after changing settings; local `.env.local` does not configure hosting. The public Supabase values are embedded in the client build. A missing gateway binding produces an unavailable response, with no fallback service.
 
-For isolated sample replies, clear `RUNPOD_BF16_CHAT_URL` and set `CHAT_PREVIEW_MODE=true`. Supabase accounts remain required. Preview replies are labeled and make no model requests; this mode is disabled in production.
+For isolated sample replies, clear a model's gateway URL (`RUNPOD_4BIT_CHAT_URL` or `RUNPOD_BF16_CHAT_URL`) and set `CHAT_PREVIEW_MODE=true`. Supabase accounts remain required. Preview replies are labeled and make no model requests; this mode is disabled in production.
 
 ## Behavior
 
+- **Model picker** chooses the model for a new chat: Qwen3.8-27B-4bit (default, no adapter) or Qwen3.8-27B-bf16. A model whose gateway status is unavailable cannot be picked. Answers are labelled "4-bit base", "BF16 base" or "BF16 + adapter". 4-bit chats are not yet saved to history.
 - Stream, stop, retry and copy Markdown replies; search and export conversations.
 - Keep multiple conversations streaming independently. Stop/Delete affect the selected conversation; sign-out closes all its requests.
 - Use Google sign-in with verified live sessions and a 100-account registration cap. New conversations sync through Supabase; older browser-only conversations remain local.
 - Retain up to 50 cloud conversations or 2,000,000 bytes per account. Whole oldest conversations may be evicted on save. Settings and pending saves remain in account-scoped browser storage. See [history operations and recovery](docs/cloud-history-operations.md).
-- **Attach image** sends one JPEG/PNG/WebP with a chat prompt to Qwen for text understanding when its gateway advertises vision support. Use BF16 base mode. Attachment bytes remain in the open tab; reload/retry can require reattachment. Assistant Markdown images are suppressed; user previews and generated-image cards remain available.
+- **Attach image** sends one JPEG/PNG/WebP with a chat prompt to Qwen for text understanding when its gateway advertises vision support. Use the 4-bit model or BF16 base mode. Attachment bytes remain in the open tab; reload/retry can require reattachment. Assistant Markdown images are suppressed; user previews and generated-image cards remain available.
 - **Search web** is an explicit per-message option, available only for verified backend model/adapter profiles. Provider configuration stays on the gateway. See [web search](docs/web-search.md).
 - Administrators can use **Create image** for FLUX text-to-image generation and **Edit this image** for a saved local result. These are separate from Qwen chat attachments. See [image generation and reference editing](docs/image-generation.md).
 
-Advanced settings and request diagnostics require a server-verified account from the administrator allowlist. Regular users retain Creativity, connection status and history controls, use gateway-fitted defaults, reuse prefixes, and use BF16 base mode. Browser preferences cannot grant administrator access. For administrators, adapter choice is saved per conversation and recorded on each answer; changing it does not relabel previous answers. Requests fail closed when the gateway cannot confirm the requested adapter mode.
+Advanced settings and request diagnostics require a server-verified account from the administrator allowlist. Regular users retain Creativity, connection status and history controls, use gateway-fitted defaults, reuse prefixes, and use BF16 base mode when BF16 is picked. The adapter toggle exists only for BF16. Browser preferences cannot grant administrator access. For administrators, adapter choice is saved per conversation and recorded on each answer; changing it does not relabel previous answers. Requests fail closed when the gateway cannot confirm the requested adapter mode.
 
 Initial chat defaults are 40,960 context tokens, 7,680 output tokens and 32 safety tokens. Verified gateway capacity takes precedence. The gateway counts the served chat template and trims oldest full exchanges to fit; byte/character limits do not guarantee a token fit. Prefix reuse defaults on; turning it off isolates each request with a fresh server-generated cache salt without freeing reserved GPU memory.
 

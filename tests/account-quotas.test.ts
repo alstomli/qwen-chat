@@ -11,7 +11,7 @@ const health = { ready: true, model: "qwen-bf16", settingsVersion: 1, accountQuo
 function headers() { return { Cookie: cookieHeader(issueSession()), Origin: "https://chat.example", "Content-Type": "application/json" }; }
 function request(extraHeaders = {}, extraBody = {}) {
   return new Request("https://chat.example/api/chat", { method: "POST", headers: { ...headers(), ...extraHeaders },
-    body: JSON.stringify({ messages: [{ role: "user", content: "hello" }], ...extraBody }) });
+    body: JSON.stringify({ model: "bf16", messages: [{ role: "user", content: "hello" }], ...extraBody }) });
 }
 function configure() {
   Object.assign(process.env, { NODE_ENV: "production", RUNPOD_BF16_CHAT_URL: "https://gateway.example", RUNPOD_BF16_CHAT_TOKEN: "x".repeat(48) });
@@ -60,7 +60,7 @@ test("chat and status fail503 when quota version or enforcement cannot be verifi
       { accountQuotasEnforced: false }, { accountQuotasEnforced: undefined }, { accountQuotasEnforced: "true" }]) {
       capability = { ...health, ...fields };
       const chat = await POST(request()); assert.equal(chat.status, 503);
-      const status = await GET(new Request("https://chat.example/api/status", { headers: headers() }));
+      const status = await GET(new Request("https://chat.example/api/status?model=bf16", { headers: headers() }));
       assert.equal(status.status, 503); assert.equal((await status.json()).ready, false);
     }
     assert.equal(calls, 0);

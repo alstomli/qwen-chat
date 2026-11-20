@@ -1,6 +1,6 @@
 import { HOSTED_CHAT_TIMEOUT_MS } from "./request-deadline";
 import { SETTINGS_MAX, parseServerLimits } from "./chat-settings";
-import { DEFAULT_MODEL, modelInfo, parseModelId, type ModelId } from "./models";
+import { DEFAULT_MODEL, hasAdapter, modelInfo, parseModelId, type ModelId } from "./models";
 import { parseImageInputLimits } from "./image-input";
 import { parseWebSearchProfiles } from "./web-search";
 export const MAX_BODY = SETTINGS_MAX.requestBytes;
@@ -31,8 +31,9 @@ export async function readJson(request: Request, limitForValue?: (value: unknown
 }
 export function connectionConfig(selected: ModelId = DEFAULT_MODEL) {
   const model = parseModelId(selected);
-  const base = process.env.RUNPOD_BF16_CHAT_URL?.replace(/\/$/, "");
-  const token = process.env.RUNPOD_BF16_CHAT_TOKEN;
+  const prefix = model === "4bit" ? "RUNPOD_4BIT_CHAT" : "RUNPOD_BF16_CHAT";
+  const base = process.env[`${prefix}_URL`]?.replace(/\/$/, "");
+  const token = process.env[`${prefix}_TOKEN`];
   if (base && token && token.length >= 32) {
     const url = new URL(base);
     if (url.username || url.password || url.search || url.hash || url.pathname !== "/") throw new Error("Invalid gateway URL.");
@@ -58,7 +59,7 @@ export async function gatewayCapabilities(config: ReturnType<typeof connectionCo
   return { limits, diagnosticsVersion: body.diagnosticsVersion === 1 ? 1 : 0,
     webSearchAvailable: body.webSearchVersion === 1 && body.webSearchAvailable === true,
     webSearchProfiles: body.webSearchVersion === 1 ? parseWebSearchProfiles(body.webSearch?.models) : undefined,
-    adapterToggleAvailable: body.adapterToggleVersion === 1 && body.adapterToggleAvailable === true,
+    adapterToggleAvailable: hasAdapter(config.model) && body.adapterToggleVersion === 1 && body.adapterToggleAvailable === true,
     imageInput: body.imageInputVersion === 1 ? parseImageInputLimits(body.imageInput) : undefined };
 }
 export async function gatewayLimits(config: ReturnType<typeof connectionConfig>) {

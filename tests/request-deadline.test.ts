@@ -12,7 +12,7 @@ const health = { ready: true, model: "qwen-bf16", settingsVersion: 1, accountQuo
 function request(timeoutSeconds = 2400, signal?: AbortSignal, body?: ReadableStream<Uint8Array>, webSearch = false) {
   const headers = { Cookie: cookieHeader(issueSession(adminIds[0])), Origin: "https://chat.example", "Content-Type": "application/json" };
   return new Request("https://chat.example/api/chat", { method: "POST", headers, signal,
-    body: body ?? JSON.stringify({ messages: [{ role: "user", content: "hello" }], useAdapter: false,
+    body: body ?? JSON.stringify({ model: "bf16", messages: [{ role: "user", content: "hello" }], useAdapter: false,
       settings: { ...DEFAULT_SETTINGS, timeoutSeconds }, ...(webSearch ? { webSearch: { version: 1, mode: "required" } } : {}) }),
     ...(body ? { duplex: "half" } : {}) } as RequestInit);
 }
@@ -43,7 +43,7 @@ test("hosted status and forwarding agree on the cap, counting auth and readiness
     };
     const response = await POST(request()); assert.equal(response.status, 200); await response.text();
     assert.equal(forwarded, 237);
-    const status = await GET(new Request("https://chat.example/api/status", { headers: request().headers }));
+    const status = await GET(new Request("https://chat.example/api/status?model=bf16", { headers: request().headers }));
     assert.equal((await status.json()).limits.timeoutSeconds, 240);
     now = 0; const shorter = await POST(request(5)); assert.equal(shorter.status, 200); await shorter.text(); assert.equal(forwarded, 2);
     delete process.env.VERCEL; webAvailable = false; now = 0; const local = await POST(request(900)); assert.equal(local.status, 200); await local.text(); assert.equal(forwarded, 897);

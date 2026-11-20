@@ -1,4 +1,4 @@
-import { DEFAULT_MODEL, type ModelId } from "./models";
+import { DEFAULT_MODEL, MODELS, type ModelId } from "./models";
 export const SETTINGS_KEY = "qwen-chat.settings.v1";
 export const MODEL_SETTINGS_KEY = "qwen-chat.model-settings.v1";
 export const DEFAULT_SETTINGS = {
@@ -75,7 +75,7 @@ export type ModelSettings = Record<ModelId, ChatSettings>;
 export function parseModelSettings(raw: string | null): ModelSettings {
   let value;
   try { value = JSON.parse(raw ?? "null"); } catch { value = null; }
-  return { bf16: value?.bf16 ? fitSettings(value.bf16) : { ...DEFAULT_SETTINGS } };
+  return Object.fromEntries(MODELS.map(({ id }) => [id, value?.[id] ? fitSettings(value[id]) : { ...DEFAULT_SETTINGS }])) as ModelSettings;
 }
 
 export function parseServerLimits(value: unknown): ChatSettings {
