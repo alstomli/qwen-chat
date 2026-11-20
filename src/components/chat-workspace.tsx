@@ -22,13 +22,13 @@ import { consumeCompletion } from "@/lib/protocol";
 import { WEB_SEARCH_HEADER, WEB_SEARCH_UNAVAILABLE, parseWebMetadata, webSearchForProfile, type WebStatus } from "@/lib/web-search";
 import { IMAGE_ACCEPTED_HEADER, IMAGE_ADAPTER_ERROR, validateImageInput } from "@/lib/image-input";
 import { prepareImage, type ImageAttachment } from "@/lib/prepare-image";
-import { completedHistory, hasSupportedModels, parseConversations, STORAGE_KEY, type Conversation, type Message } from "@/lib/storage";
+import { completedHistory, isHistoryModel, parseConversations, STORAGE_KEY, type Conversation, type Message } from "@/lib/storage";
 import { exportHistory, HISTORY_NOTICE_KEY, type SaveState } from "@/lib/cloud-history";
 import { useCloudHistory } from "@/lib/use-cloud-history";
 
 import { browserAuth } from "@/lib/supabase/browser";
 import { accountStorageKey } from "@/lib/account-storage";
-import { DEFAULT_MODEL, hasAdapter, modelInfo, answerModelLabel, type ModelId } from "@/lib/models";
+import { DEFAULT_MODEL, hasAdapter, modelInfo, perModel, answerModelLabel, type ModelId } from "@/lib/models";
 import { ModelPicker } from "@/components/model-picker";
 import { allModelStatusRequests, initialModelConnections, updateModelConnection } from "@/lib/model-status";
 const starters = [
@@ -75,8 +75,8 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
   const [draftModel, setDraftModel] = useState<ModelId>(DEFAULT_MODEL);
   const [draftAdapter, setDraftAdapter] = useState(false);
   const [streamingChats, setStreamingChats] = useState<Set<string>>(() => new Set());
-  const [toast, setToast] = useState(""); const [preferences, setPreferences] = useState<ModelSettings>({ "4bit": { ...DEFAULT_SETTINGS }, bf16: { ...DEFAULT_SETTINGS } }); const [temperature, setTemperature] = useState(0.7);
-  const [diagnosticsEnabled, setDiagnosticsEnabled] = useState<Record<ModelId, boolean>>({ "4bit": false, bf16: false });
+  const [toast, setToast] = useState(""); const [preferences, setPreferences] = useState<ModelSettings>(() => perModel(() => ({ ...DEFAULT_SETTINGS }))); const [temperature, setTemperature] = useState(0.7);
+  const [diagnosticsEnabled, setDiagnosticsEnabled] = useState<Record<ModelId, boolean>>(() => perModel(() => false));
   const [diagnosticRecords, setDiagnosticRecords] = useState<DiagnosticRecord[]>([]);
   const diagnosticsById = new Map(diagnosticRecords.map(record => [record.id, record]));
   function patchDiagnostic(id: string, patch: Partial<DiagnosticRecord>) {
@@ -121,12 +121,12 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
 
   useEffect(() => {
     if (!authenticated) return;
-    try { const stored = parseConversations(localStorage.getItem(storageKey)); legacyIds.current = new Set(stored.map(chat => chat.id)); setChats(stored); setActiveId(stored[0]?.id ?? null); setDiagnosticRecords([]); setDiagnosticsEnabled({ "4bit": false, bf16: false }); setHistoryNotice(localStorage.getItem(accountStorageKey(HISTORY_NOTICE_KEY, userId)) !== "dismissed"); }
+    try { const stored = parseConversations(localStorage.getItem(storageKey)); legacyIds.current = new Set(stored.map(chat => chat.id)); setChats(stored); setActiveId(stored[0]?.id ?? null); setDiagnosticRecords([]); setDiagnosticsEnabled(perModel(() => false)); setHistoryNotice(localStorage.getItem(accountStorageKey(HISTORY_NOTICE_KEY, userId)) !== "dismissed"); }
     catch { setToast("Your browser couldn't load saved conversations."); }
     try {
       const raw = localStorage.getItem(settingsKey);
       setPreferences(canUseAdvancedSettings ? parseModelSettings(localStorage.getItem(modelSettingsKey))
-        : { "4bit": { ...DEFAULT_SETTINGS }, bf16: { ...DEFAULT_SETTINGS } });
+        : perModel(() => ({ ...DEFAULT_SETTINGS })));
       const temperature = JSON.parse(raw ?? "null")?.temperature;
       if (typeof temperature === "number" && Number.isFinite(temperature) && temperature >= 0 && temperature <= 1.5) setTemperature(temperature);
     } catch { setToast("Your browser couldn't load saved settings."); }
@@ -250,7 +250,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
     text = text.trim(); if (!text || (activeId && controllers.current.has(activeId))) return;
     if (activeId && cloud?.entries.get(activeId)?.loaded === false) { setToast("Load this conversation before adding a message."); return; }
     if (!connection.ready || !connection.limits) { setToast(connection.error ?? "Wait for the server limits to be verified before sending."); return; }
-    if (selectedModel === "bf16" && selectedAdapter === false && !adapterAvailable && !preview) { setToast("Adapter selection is unavailable. Reconnect or start a new conversation."); return; }
+    if (hasAdapter(selectedModel) && selectedAdapter === false && !adapterAvailable && !preview) { setToast("Adapter selection is unavailable. Reconnect or start a new conversation."); return; }
     const useAdapter = effectiveAdapter;
     if (text.length > effectiveSettings.inputCharacters) { setToast(`Please shorten your message to ${effectiveSettings.inputCharacters.toLocaleString()} characters or fewer.`); return; }
     const retryIndex = retryId ? messages.findIndex(message => message.id === retryId && message.role === "user") : -1;
@@ -490,7 +490,7 @@ export default function ChatWorkspace({ userId, email, canUseAdvancedSettings }:
     </aside>
     <div className="main-shell">
       <header className="workspace-header"><div className="workspace-heading"><button className="icon-button mobile-only" onClick={() => setSidebar(true)} aria-label="Open sidebar"><Menu size={20}/></button><span className="header-label">Personal workspace</span><span className="header-slash">/</span>{active ? <span className="workspace-model">{modelInfo(selectedModel).label}</span> : <ModelPicker connections={connections} value={selectedModel} disabled={readingImage} onChange={selectModel}/>}</div><button className={`connection-pill ${connection.mode === "live" && connection.ready ? "online" : preview ? "preview" : "offline"}`} onClick={() => setSettings(true)}><span/>{preview ? "Local preview" : connection.mode === "checking" ? "Connecting" : connection.mode === "unconfigured" ? "Setup needed" : connection.ready ? "Model online" : "Model offline"}<ArrowUpRight size={13}/></button></header>
-      {active && !hasSupportedModels(active) && <div className="history-local-note" role="status">4-bit chats aren’t saved to history yet. This chat is only in this tab and is lost when you reload or close it.</div>}
+      {active && !isHistoryModel(active.model) && <div className="history-local-note" role="status">4-bit chats aren’t saved to history yet. This chat is only in this tab and is lost when you reload or close it.</div>}
       {active && isLocal(active) && <div className="history-local-note" role="status">{(legacyIds.current.has(active.id) ? !legacyDurable : !cloud?.durable) ? "Browser storage is unavailable. This copy is only in this tab; export it now to keep it." : legacyIds.current.has(active.id) ? "This older conversation stays on this browser, including new replies." : activeEntry?.state === "oversized" && !cloud?.durable ? "This chat is too large for cloud history and browser storage is unavailable. Export it now to keep a copy." : activeEntry?.state === "oversized" ? "This chat is too large for cloud history. It’s saved on this browser; export it to keep a copy." : activeEntry?.state === "conflict" ? "This chat changed on another device. Your unsynced copy stays on this browser." : activeEntry?.state === "create_limited" ? "Too many recent cloud chat changes. This chat stays on this browser; try a new chat later." : "This chat stays on this browser. Export it to keep a copy."}<button disabled={exporting} onClick={() => { void downloadHistory("json"); }}>Export JSON</button><button onClick={newChat}>Start new chat</button></div>}
       {cloud?.usage.paused && <div className="history-local-note" role="status">{cloud.durable ? "Cloud saving is temporarily paused. Your conversations stay on this browser until sync resumes. You can keep chatting, export, or delete history." : "Cloud saving is paused and browser storage is unavailable. Export your conversations now to keep a copy. You can keep chatting or delete history."}</div>}
       <main className={`chat-main ${messages.length ? "has-messages" : ""}`} ref={scroller} onScroll={() => { const el = scroller.current; if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>

@@ -66,21 +66,23 @@ test("4bit reaches its own gateway with its own token and alias; unreachable BF1
     Object.assign(process.env, { NODE_ENV: "production", CHAT_PASSWORD: "test", SESSION_SECRET: "s".repeat(48), CHAT_PREVIEW_MODE: "false",
       RUNPOD_4BIT_CHAT_URL: "https://four.example", RUNPOD_4BIT_CHAT_TOKEN: "f".repeat(48),
       RUNPOD_BF16_CHAT_URL: "https://bf.example", RUNPOD_BF16_CHAT_TOKEN: "b".repeat(48) });
-    const calls: { url: string; token: string | null }[] = [];
+    const calls: { url: string; token: string | null; body: Record<string, unknown> | null }[] = [];
+    let alias = "qwen-4bit";
     globalThis.fetch = async (input, init) => {
       const auth = authResponse(input, init); if (auth) return auth;
       const url = String(input);
       if (url.startsWith("https://bf.example/")) throw new TypeError("fetch failed");
       assert.ok(url.startsWith("https://four.example/"));
-      calls.push({ url, token: new Headers(init?.headers).get("Authorization") });
-      if (url.endsWith("/health")) return Response.json({ ready: true, model: "qwen-4bit", settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true,
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      calls.push({ url, token: new Headers(init?.headers).get("Authorization"), body });
+      if (url.endsWith("/health")) return Response.json({ ready: true, model: alias, settingsVersion: 1, accountQuotaVersion: 1, accountQuotasEnforced: true,
         limits: { ...SETTINGS_MAX, contextTokens: 40960 }, diagnosticsVersion: 0, adapterToggleVersion: 1, adapterToggleAvailable: false,
         imageInputVersion: 1, imageInput: { maxBytes: 262144, maxDimension: 2048, mimeTypes: ["image/png"] } });
       return new Response(`data: {"choices":[{"delta":{"content":"4bit fixture"}}]}
 
 data: [DONE]
 
-`, { headers: { "Content-Type": "text/event-stream" } });
+`, { headers: { "Content-Type": "text/event-stream", ...(body?.image ? { "X-Chat-Image-Accepted": "true" } : {}) } });
     };
     const headers = { Origin: "https://chat.example", Cookie: cookieHeader(issueSession()).split(";")[0], "Content-Type": "application/json" };
     for (const model of [undefined, "4bit"]) {
@@ -94,6 +96,12 @@ data: [DONE]
     assert.equal((await (await GET(new Request("https://chat.example/api/status", { headers }))).json()).model, "4bit");
     const bf16 = await (await GET(new Request("https://chat.example/api/status?model=bf16", { headers }))).json();
     assert.equal(bf16.model, "bf16"); assert.equal(bf16.ready, false);
+    const image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jgZkAAAAASUVORK5CYII=";
+    const withImage = await POST(new Request("https://chat.example/api/chat", { method: "POST", headers,
+      body: JSON.stringify({ model: "4bit", messages: [{ role: "user", content: "Describe this." }], settings: DEFAULT_SETTINGS, image }) }));
+    assert.equal(withImage.status, 200); assert.match(await withImage.text(), /4bit fixture/); assert.equal(calls.at(-1)!.body?.image, image); assert.equal(calls.at(-1)!.body?.useAdapter, undefined);
+    alias = "qwen-bf16";
+    assert.equal((await (await GET(new Request("https://chat.example/api/status?model=4bit", { headers }))).json()).ready, false);
   } finally {
     globalThis.fetch = fetcher;
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];

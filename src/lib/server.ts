@@ -31,7 +31,7 @@ export async function readJson(request: Request, limitForValue?: (value: unknown
 }
 export function connectionConfig(selected: ModelId = DEFAULT_MODEL) {
   const model = parseModelId(selected);
-  const prefix = model === "4bit" ? "RUNPOD_4BIT_CHAT" : "RUNPOD_BF16_CHAT";
+  const prefix = modelInfo(model).gatewayEnv;
   const base = process.env[`${prefix}_URL`]?.replace(/\/$/, "");
   const token = process.env[`${prefix}_TOKEN`];
   if (base && token && token.length >= 32) {

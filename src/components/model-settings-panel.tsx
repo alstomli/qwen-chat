@@ -47,7 +47,7 @@ export function ModelSettingsPanel({ canUseAdvancedSettings, connections, prefer
           diagnosticsAvailable={connection.diagnosticsAvailable === true} diagnosticsEnabled={diagnosticsEnabled[model.id]}
           onDiagnosticsChange={enabled => onDiagnosticsChange(model.id, enabled)} preview={connection.mode === "preview"}
           adapter={hasAdapter(model.id) ? {
-            checked: selectedModel === model.id ? selectedAdapter : true,
+            checked: selectedModel === model.id && selectedAdapter,
             disabled: selectedModel !== model.id || adapterBusy || !connection.ready || connection.adapterToggleAvailable !== true,
             help: selectedModel !== model.id ? "Select the BF16 model for a new chat to change its adapter."
               : adapterBusy ? "Stop the current reply before changing its adapter."
