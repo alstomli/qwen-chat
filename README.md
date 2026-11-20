@@ -8,7 +8,7 @@ Browser → Next.js → authenticated Qwen gateway → private vLLM
                  → authenticated FLUX image jobs (administrators)
 ```
 
-Qwen3.8-27B-bf16 is the sole supported chat model. Its base and trained-adapter modes share the same service and account quota. Unsupported model IDs are rejected; historical conversations with unsupported model metadata are omitted rather than relabeled. Browser storage keys remain stable to preserve supported history and preferences.
+Two chat models are supported: Qwen3.8-27B-4bit (default for new chats, no adapter) and Qwen3.8-27B-bf16, whose base and trained-adapter modes share the same service and account quota. Both save to cloud history. Conversations saved without a model tag stay BF16. Unsupported model IDs are rejected; historical conversations with unsupported model metadata are omitted rather than relabeled. Browser storage keys remain stable to preserve supported history and preferences.
 
 ## Run locally
 
@@ -39,7 +39,7 @@ For isolated sample replies, clear a model's gateway URL (`RUNPOD_4BIT_CHAT_URL`
 
 ## Behavior
 
-- **Model picker** chooses the model for a new chat: Qwen3.8-27B-4bit (default, no adapter) or Qwen3.8-27B-bf16. A model whose gateway status is unavailable cannot be picked. Answers are labelled "4-bit base", "BF16 base" or "BF16 + adapter". 4-bit chats are not yet saved to history.
+- **Model picker** chooses the model for a new chat: Qwen3.8-27B-4bit (default, no adapter) or Qwen3.8-27B-bf16. A model whose gateway status is unavailable cannot be picked. Answers are labelled "4-bit base", "BF16 base" or "BF16 + adapter".
 - Stream, stop, retry and copy Markdown replies; search and export conversations.
 - Keep multiple conversations streaming independently. Stop/Delete affect the selected conversation; sign-out closes all its requests.
 - Use Google sign-in with verified live sessions and a 100-account registration cap. New conversations sync through Supabase; older browser-only conversations remain local.

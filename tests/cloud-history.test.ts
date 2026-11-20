@@ -158,14 +158,14 @@ test('cloud load, later save and durable restore preserve older source metadata'
   restored.store.dispose();
 });
 
-test('retired model cache entries and pending writes never restore or reach the cloud', async () => {
+test('unknown model cache entries and pending writes never restore or reach the cloud', async () => {
   let saves = 0;
   const { store, records } = harness(async name => { if (name === 'save_chat_v2') saves++; return { data: usage, error: null }; });
   const retained = chat(); retained.model = 'bf16';
-  const removed = { ...chat(), model: '4bit' } as unknown as Conversation;
-  const legacyAnswer = { ...chat(), model: 'bf16', messages: [{ id: 'old', role: 'assistant', content: 'old', model: '4bit' }] } as unknown as Conversation;
+  const removed = { ...chat(), model: 'awq' } as unknown as Conversation;
+  const legacyAnswer = { ...chat(), model: 'bf16', messages: [{ id: 'old', role: 'assistant', content: 'old', model: 'awq' }] } as unknown as Conversation;
   const pending = snapshot(chat());
-  pending.operation = { id: randomUUID(), revision: 0, payload: { ...cloudPayload(pending.chat), model: '4bit' } as unknown as ReturnType<typeof cloudPayload> };
+  pending.operation = { id: randomUUID(), revision: 0, payload: { ...cloudPayload(pending.chat), model: 'awq' } as unknown as ReturnType<typeof cloudPayload> };
   records.set('qa:user:alice', JSON.stringify([snapshot(retained), snapshot(removed), snapshot(legacyAnswer), pending]));
   store.restore();
   assert.deepEqual([...store.entries.keys()], [retained.id]);
@@ -173,16 +173,16 @@ test('retired model cache entries and pending writes never restore or reach the 
   assert.equal(saves, 0); assert.equal(store.entries.size, 1); store.dispose();
 });
 
-test('retired cloud summaries and unsupported assistant metadata in later pages stay out of browser history', async () => {
+test('unknown-model cloud summaries and unsupported assistant metadata in later pages stay out of browser history', async () => {
   const supported = chat(); supported.model = 'bf16';
-  const retired = { ...chat(), model: '4bit', revision: 1 };
+  const retired = { ...chat(), model: 'awq', revision: 1 };
   let pages = 0;
   const { store } = harness(async name => {
     if (name === 'list_chat_history') return { data: [retired, { ...supported, revision: 1 }], error: null };
     if (name !== 'get_chat_history_v2') return { data: usage, error: null };
     pages++;
     const messages = pages === 1 ? [{ id: 'u', role: 'user', content: 'question' }]
-      : [{ id: 'a', role: 'assistant', content: 'retired answer', state: 'complete', model: '4bit' }];
+      : [{ id: 'a', role: 'assistant', content: 'retired answer', state: 'complete', model: 'awq' }];
     return { data: { payload: { title: supported.title, model: 'bf16', messages }, revision: 1, totalMessages: 2, updatedAt: 1 }, error: null };
   });
   await store.refresh(); assert.deepEqual([...store.entries.keys()], [supported.id]);

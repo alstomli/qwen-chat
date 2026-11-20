@@ -4,7 +4,7 @@ This runbook describes the current source requirements; it does not establish wh
 
 ## Migration order
 
-Apply missing reviewed migrations in filename order, checking the target's migration records and actual schema first. Fresh installations need all eight; existing installations need only their unapplied suffix. Do not replay fresh-install SQL or assume an earlier release's hosted state.
+Apply missing reviewed migrations in filename order, checking the target's migration records and actual schema first. Fresh installations need all nine; existing installations need only their unapplied suffix. Do not replay fresh-install SQL or assume an earlier release's hosted state.
 
 | Order | Migration | Purpose |
 | --- | --- | --- |
@@ -16,6 +16,7 @@ Apply missing reviewed migrations in filename order, checking the target's migra
 | 6 | `202611110002_reference_image_metadata.sql` | Version-2 reference-edit metadata |
 | 7 | `202611110003_versioned_image_history_reads.sql` | `get_chat_history_v2`; protects edits from older readers |
 | 8 | `202611110004_versioned_image_history_writes.sql` | `save_chat_v2`; protects edits from older writers |
+| 9 | `202611190001_4bit_history.sql` | 4-bit and BF16 history writes |
 
 Migration files live in [supabase/migrations](../supabase/migrations). The current client requires the versioned read/write RPCs before activation. Keep the legacy guards: older open tabs must receive reload/conflict responses rather than strip edit intent. New client and legacy operations share session, ownership, revision and quota protections.
 
@@ -350,3 +351,14 @@ accepted. Existing rows and earlier migration files remain unchanged. The fronte
 omits explicit unsupported histories from local cache, cloud listings, and loaded
 message pages. Hidden cloud rows still count against the account storage quota;
 this update does not delete them or stop any model service.
+
+## 4-bit model writes
+
+Apply `202611190001_4bit_history.sql` before activating a frontend that saves
+4-bit chats. It replaces only the payload cleaner: it now accepts the `4bit` and
+`bf16` model IDs and still rejects any other explicit conversation or answer
+model ID. It changes no table, row, quota or RPC, and is safe to reapply. Rows
+already tagged `4bit` from the earlier AWQ model are untouched; the frontend shows
+them again under the 4-bit model. Conversations and answers saved without a model
+tag still load as BF16. Without this migration, the first 4-bit save is rejected
+and that browser pauses cloud saving (chats stay local until Retry succeeds).
