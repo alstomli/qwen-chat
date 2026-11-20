@@ -30,7 +30,7 @@ export async function checkImageInput({ base, gateway, token, headers, authFixtu
   assert.equal(capabilities.imageInputVersion, 1);
   assert.equal(capabilities.imageInput.maxBytes, 262144);
   assert.equal(capabilities.imageInput.maxDimension, 2048);
-  assert.equal((await get('/api/status?model=4bit')).status, 400);
+  assert.equal((await get('/api/status?model=other')).status, 400);
   const oldExchange = [{ role: 'user', content: 'An older question.' }, { role: 'assistant', content: 'An older answer.' }];
   const imageResponse = await ask({ ...request, messages: [...oldExchange, ...request.messages], image: imageData }, { 'X-Chat-Diagnostics': '1' });
   const imageEvents = await readStream(imageResponse);
@@ -49,7 +49,7 @@ export async function checkImageInput({ base, gateway, token, headers, authFixtu
   for (const input of [
     { ...request, image: 'https://example.invalid/image.png' },
     { ...request, image: [imageData] },
-    { ...request, model: '4bit', useAdapter: undefined, image: imageData },
+    { ...request, model: 'other', useAdapter: undefined, image: imageData },
     { ...request, useAdapter: true, image: imageData },
   ]) {
     const rejected = await ask(input);

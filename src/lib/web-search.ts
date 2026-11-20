@@ -20,7 +20,7 @@ export function parseWebSearchProfiles(value: unknown): WebSearchProfile[] | und
 }
 export function webSearchForProfile(capability: { webSearchProfiles?: WebSearchProfile[]; webSearchAvailable?: boolean }, model: string, useAdapter?: boolean) {
   if (!isModelId(model)) return false;
-  // BF16 requires the gateway to advertise the requested base/adapter profile explicitly.
+  // Each gateway must advertise the requested base/adapter profile explicitly; 4bit has only the base.
   return capability.webSearchProfiles?.find(p => p.useAdapter === (useAdapter ?? false))?.available === true;
 }
 export type WebEvent = { version: 1; runId: string; sequence: number } & (

@@ -1,5 +1,5 @@
 import type { ChatSettings } from "./chat-settings";
-import { MODELS, type ModelId } from "./models";
+import { MODELS, perModel, type ModelId } from "./models";
 import type { ImageInputLimits } from "./image-input";
 import type { WebSearchProfile } from "./web-search";
 
@@ -15,7 +15,7 @@ export type Connection = {
 
 export type ModelConnections = Record<ModelId, Connection>;
 export function initialModelConnections(): ModelConnections {
-  return { bf16: { model: "bf16", mode: "checking", ready: false } };
+  return perModel(id => ({ model: id, mode: "checking", ready: false }));
 }
 export function updateModelConnection(current: ModelConnections, next: Connection): ModelConnections {
   const lastVerifiedLimits = next.mode === "live" && next.ready && next.limits

@@ -28,7 +28,7 @@ async function gatewayFixture(run: (fixture: {
     adapterConfirmation: "false", calls: [] as { url: string; headers: Headers; body?: ReturnType<typeof validateInput> }[],
     request: (body: object = {}, headers: Record<string, string> = {}, cookieUserId = user.id) => new Request("https://chat.example/api/chat", {
       method: "POST", headers: { Origin: "https://chat.example", Cookie: cookieHeader(issueSession(cookieUserId)), "Content-Type": "application/json", ...headers },
-      body: JSON.stringify({ messages, ...body }),
+      body: JSON.stringify({ model: "bf16", messages, ...body }),
     }),
   };
   globalThis.fetch = async (input, init) => {
@@ -138,7 +138,7 @@ test("normal diagnostics requests are denied and status remains unavailable desp
     assert.equal((await POST(fixture.request({ canUseAdvancedSettings: true }, headers, adminIds[0]))).status, 403);
     assert.equal(fixture.calls.length, 0);
     const request = fixture.request({}, {}, adminIds[0]);
-    const status = await GET(new Request("https://chat.example/api/status", { headers: request.headers }));
+    const status = await GET(new Request("https://chat.example/api/status?model=bf16", { headers: request.headers }));
     assert.equal(status.headers.get("Cache-Control"), "no-store");
     const body = await status.json();
     assert.equal(body.diagnosticsAvailable, false); assert.equal(body.diagnosticsVersion, 0);
@@ -159,7 +159,7 @@ test("both admins preserve adapter, numeric, prefix and diagnostic controls with
       assert.equal(sent.body!.useAdapter, true);
       assert.equal(sent.headers.get("X-Chat-User-Id"), userId);
       assert.equal(sent.body!.max_tokens, 512); assert.equal(sent.headers.get(DIAGNOSTICS_HEADER), "1");
-      const status = await GET(new Request("https://chat.example/api/status", { headers: fixture.request({}, {}, userId).headers }));
+      const status = await GET(new Request("https://chat.example/api/status?model=bf16", { headers: fixture.request({}, {}, userId).headers }));
       assert.equal((await status.json()).diagnosticsAvailable, true);
       const before = fixture.calls.filter(call => call.body).length;
       for (const body of [{ settings: null }, { settings: { unknown: true } }, { settings, max_tokens: 256 },

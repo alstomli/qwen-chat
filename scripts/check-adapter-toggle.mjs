@@ -21,4 +21,4 @@ const invalid = await fetch(base + '/api/chat', { method: 'POST', headers, body:
   model: '4bit', useAdapter: false, messages: [{ role: 'user', content: 'invalid' }], max_tokens: 128,
 }) });
 assert.equal(invalid.status, 400);
-console.log('PASS: local app → real gateway → model fixture; on/off/on routes, confirmation headers, completed streams and 4bit rejection');
+console.log('PASS: local app → real gateway → model fixture; on/off/on routes, confirmation headers, completed streams and adapter-on-4bit rejection');

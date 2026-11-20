@@ -1,8 +1,7 @@
 import { parseGeneratedImage } from "./generated-image";
 import { parseSourceMetadata } from "./history-metadata";
 import { parseWebMetadata } from "./web-search";
-import { isModelId } from "./models";
-import { hasSupportedModels, type Conversation, type Message } from "./storage";
+import { hasSupportedModels, isHistoryModel, type Conversation, type Message } from "./storage";
 
 export const CLOUD_CACHE_KEY = "qwen-chat.cloud-history.v1";
 export const HISTORY_NOTICE_KEY = "qwen-chat.history-notice.v1";
@@ -16,12 +15,12 @@ type Storage = Pick<globalThis.Storage, "getItem" | "setItem" | "removeItem">;
 // Whitelist twice (here and SQL). A streaming placeholder is omitted until its terminal state.
 export function cloudPayload(chat: Conversation): Pick<Conversation, "title" | "model" | "useAdapter" | "messages"> {
   return {
-    title: chat.title.slice(0, 160), model: isModelId(chat.model) ? chat.model : undefined,
+    title: chat.title.slice(0, 160), model: isHistoryModel(chat.model) ? chat.model : undefined,
     useAdapter: typeof chat.useAdapter === "boolean" ? chat.useAdapter : undefined,
     messages: chat.messages.filter(m => m.role === "user" || m.state).map(m => ({
       id: m.id, role: m.role, content: m.content,
       ...(m.role === "user" ? { imageName: m.imageName?.slice(0, 160), docsMode: m.docsMode === true ? true : undefined, searchRequested: m.searchRequested === true ? true : undefined } : {
-        generatedImage: parseGeneratedImage(m.generatedImage), state: m.state, model: isModelId(m.model) ? m.model : undefined,
+        generatedImage: parseGeneratedImage(m.generatedImage), state: m.state, model: isHistoryModel(m.model) ? m.model : undefined,
         useAdapter: typeof m.useAdapter === "boolean" ? m.useAdapter : undefined,
         note: m.state === "error" ? "The reply failed. Please retry." : m.state === "stopped" ? "You stopped this reply." : undefined,
         docsSources: parseSourceMetadata(m.docsSources),

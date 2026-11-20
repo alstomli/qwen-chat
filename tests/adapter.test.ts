@@ -17,15 +17,16 @@ test("adapter preference and answer labels persist independently without relabel
   assert.deepEqual(chats[0].messages.map(m => answerModelLabel(m.model!, m.useAdapter)), ["Qwen3.8-27B-bf16", "BF16 + adapter", "BF16 base"]);
   chats[0].useAdapter = true;
   assert.equal(chats[0].messages[2].useAdapter, false);
-  const switched = parseConversations(JSON.stringify([{ ...chats[0], model: "4bit", useAdapter: false }]));
-  assert.deepEqual(switched, []);
+  assert.equal(answerModelLabel("4bit"), "4-bit base");
+  assert.equal(answerModelLabel("4bit", false), "4-bit base");
 });
 
-test("adapter input accepts only explicit BF16 booleans and participates in byte fitting", () => {
+test("adapter input accepts only explicit BF16 booleans, never on 4bit, and participates in byte fitting", () => {
   const messages = [{ role: "user", content: "Hello" }];
   for (const useAdapter of [true, false]) assert.equal(validateInput({ model: "bf16", useAdapter, messages }).useAdapter, useAdapter);
   for (const useAdapter of [null, "false", 0, {}]) assert.throws(() => validateInput({ model: "bf16", useAdapter, messages }));
-  assert.throws(() => validateInput({ model: "4bit", useAdapter: false, messages }));
+  for (const useAdapter of [true, false]) assert.throws(() => validateInput({ model: "4bit", useAdapter, messages }), /BF16/);
+  assert.equal(validateInput({ model: "4bit", messages }).useAdapter, undefined);
   const settings = { ...DEFAULT_SETTINGS, requestBytes: 1024 };
   const input = [{ role: "user", content: "" }];
   const overhead = jsonBytes({ model: "bf16", messages: input, max_tokens: settings.outputTokens, temperature: 0.7, settings, stream: true });

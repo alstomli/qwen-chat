@@ -31,9 +31,9 @@ test("ordinary API streaming ignores obsolete gateway capabilities and strips re
     return new Response(stream, { headers: { "X-Chat-Adapter-Enabled": "false", "X-Chat-Docs-Mode": "1", "X-Chat-Docs-Sources": encodeURIComponent(JSON.stringify(sources)) } });
   });
   const headers = { Origin: "https://chat.example", Cookie: cookieHeader(issueSession()).split(";")[0], "Content-Type": "application/json" };
-  const post = (extra = {}) => POST(new Request("https://chat.example/api/chat", { method: "POST", headers, body: JSON.stringify({ messages, ...extra }) }));
+  const post = (extra = {}) => POST(new Request("https://chat.example/api/chat", { method: "POST", headers, body: JSON.stringify({ model: "bf16", messages, ...extra }) }));
   try {
-    const status = await (await GET(new Request("https://chat.example/api/status", { headers }))).json();
+    const status = await (await GET(new Request("https://chat.example/api/status?model=bf16", { headers }))).json();
     assert.equal(status.ready, true);
     assert.ok(!Object.keys(status).some(key => key.toLowerCase().includes("docs")));
     for (const obsolete of [{ docsMode: true }, { docsMode: false }, { docsPassages: [] }]) assert.equal((await post(obsolete)).status, 400);

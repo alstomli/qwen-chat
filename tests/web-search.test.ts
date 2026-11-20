@@ -50,6 +50,8 @@ test("web capabilities distinguish verified base and adapter aliases", () => {
   assert.equal(webSearchForProfile(capability, "bf16", true), false);
   assert.equal(webSearchForProfile(capability, "bf16", false), true);
   assert.equal(webSearchForProfile({ webSearchAvailable: true }, "bf16", false), false);
+  const fourBit = { webSearchProfiles: parseWebSearchProfiles([{ useAdapter: false, available: true, model: "qwen-4bit" }]) };
+  assert.equal(webSearchForProfile(fourBit, "4bit"), true);
   assert.equal(parseWebSearchProfiles([{ useAdapter: false, available: true }, { useAdapter: false, available: false }]), undefined);
 });
 
@@ -118,10 +120,10 @@ test("authenticated API automatically enables eligible text, falls back when uns
     return new Response(available ? webStream : 'data: {"choices":[{"delta":{"content":"Plain answer"}}]}\n\ndata: [DONE]\n\n', { headers: { "X-Chat-Adapter-Enabled": "false", ...(accepted ? { "X-Chat-Web-Search": "1" } : {}) } });
   });
   const headers = { Origin: "https://chat.example", Cookie: cookieHeader(issueSession()).split(";")[0], "Content-Type": "application/json" };
-  const request = (signal?: AbortSignal) => new Request("https://chat.example/api/chat", { method: "POST", headers, signal, body: JSON.stringify({ messages }) });
+  const request = (signal?: AbortSignal) => new Request("https://chat.example/api/chat", { method: "POST", headers, signal, body: JSON.stringify({ model: "bf16", messages }) });
   try {
     assert.equal((await POST(new Request("https://chat.example/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages }) }))).status, 401);
-    const status = await (await GET(new Request("https://chat.example/api/status", { headers }))).json();
+    const status = await (await GET(new Request("https://chat.example/api/status?model=bf16", { headers }))).json();
     assert.equal(status.webSearchAvailable, true);
     const response = await POST(request()); assert.equal(response.status, 200); assert.equal(response.headers.get("X-Chat-Web-Search"), "1");
     assert.match(await response.text(), /web-sources/); assert.deepEqual(forwarded?.webSearch, { version: 1, mode: "auto" });

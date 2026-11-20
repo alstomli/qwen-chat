@@ -1,7 +1,7 @@
 import { traceEventReader, type TraceUpdate } from "./request-trace";
 import { validateSettings, jsonBytes, type ChatSettings } from "./chat-settings";
 import { parseUsage, parseTimingEvent, type GatewayTimingEvent, type TokenUsage } from "./diagnostics";
-import { parseModelId, type ModelId } from "./models";
+import { hasAdapter, parseModelId, type ModelId } from "./models";
 import { IMAGE_ADAPTER_ERROR, validateImageInput } from "./image-input";
 import { validateWebSearch, webEventReader, type WebEvent, type WebSearchRequest } from "./web-search";
 export type ChatMessage = { role: "user" | "assistant"; content: string };
@@ -12,7 +12,7 @@ export function validateInput(value: unknown): ChatInput {
   const data = value as Record<string, unknown>;
   const webSearch = validateWebSearch(data.webSearch);
   const model = parseModelId(data.model);
-  if (data.useAdapter !== undefined && typeof data.useAdapter !== "boolean")
+  if (data.useAdapter !== undefined && (!hasAdapter(model) || typeof data.useAdapter !== "boolean"))
     throw new Error("Adapter selection must be a boolean for the BF16 model.");
   const useAdapter = data.useAdapter as boolean | undefined;
   if (Object.hasOwn(data, "docsMode") || Object.hasOwn(data, "docsPassages"))

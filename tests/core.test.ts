@@ -71,20 +71,25 @@ test("storage recovers from corruption and excludes unsuccessful turns from futu
   ]);
   assert.deepEqual(history, [{ role: "user", content: "successful question" }, { role: "assistant", content: "answer" }]);
 });
-test("production disables sample replies and requires an HTTPS gateway", () => {
-  const saved = { node: process.env.NODE_ENV, url: process.env.RUNPOD_BF16_CHAT_URL, token: process.env.RUNPOD_BF16_CHAT_TOKEN, preview: process.env.CHAT_PREVIEW_MODE };
+test("production disables sample replies and requires an HTTPS gateway for each model's own settings", () => {
+  const keys = ["NODE_ENV", "CHAT_PREVIEW_MODE", "RUNPOD_BF16_CHAT_URL", "RUNPOD_BF16_CHAT_TOKEN", "RUNPOD_4BIT_CHAT_URL", "RUNPOD_4BIT_CHAT_TOKEN"];
+  const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
   try {
     Reflect.set(process.env, "NODE_ENV", "production");
     process.env.CHAT_PREVIEW_MODE = "true";
-    delete process.env.RUNPOD_BF16_CHAT_URL; delete process.env.RUNPOD_BF16_CHAT_TOKEN;
-    assert.equal(connectionConfig().mode, "unconfigured");
-    process.env.RUNPOD_BF16_CHAT_URL = "http://127.0.0.1:18001";
-    process.env.RUNPOD_BF16_CHAT_TOKEN = "test-only-token-" + "x".repeat(40);
-    assert.throws(() => connectionConfig(), /HTTPS/);
-    process.env.RUNPOD_BF16_CHAT_URL = "https://gateway.example";
-    assert.equal(connectionConfig().mode, "live");
+    for (const [model, prefix, other] of [["bf16", "RUNPOD_BF16_CHAT", "RUNPOD_4BIT_CHAT"], ["4bit", "RUNPOD_4BIT_CHAT", "RUNPOD_BF16_CHAT"]] as const) {
+      for (const key of keys.slice(2)) delete process.env[key];
+      process.env[`${other}_URL`] = "https://other.example"; process.env[`${other}_TOKEN`] = "o".repeat(48);
+      assert.equal(connectionConfig(model).mode, "unconfigured");
+      process.env[`${prefix}_URL`] = "http://127.0.0.1:18001";
+      process.env[`${prefix}_TOKEN`] = "test-only-token-" + "x".repeat(40);
+      assert.throws(() => connectionConfig(model), /HTTPS/);
+      process.env[`${prefix}_URL`] = "https://gateway.example";
+      assert.deepEqual([connectionConfig(model).mode, connectionConfig(model).base, connectionConfig(model).token], ["live", "https://gateway.example", "test-only-token-" + "x".repeat(40)]);
+    }
+    assert.equal(connectionConfig().model, "4bit");
   } finally {
-    for (const [key, value] of Object.entries({ NODE_ENV: saved.node, RUNPOD_BF16_CHAT_URL: saved.url, RUNPOD_BF16_CHAT_TOKEN: saved.token, CHAT_PREVIEW_MODE: saved.preview })) {
+    for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key]; else Reflect.set(process.env, key, value);
     }
   }
